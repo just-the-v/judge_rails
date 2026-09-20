@@ -1,0 +1,17 @@
+# frozen_string_literal: true
+
+Jev.configure do |config|
+  # Never commit a key. Set JEV_API_KEY in the environment, or store it in
+  # Rails credentials under jev.api_key (bin/rails credentials:edit).
+  config.api_key = ENV["JEV_API_KEY"] || Rails.application.credentials.dig(:jev, :api_key)
+
+  config.logger = Rails.logger
+
+  # Defaults, uncomment to override:
+  #
+  # config.base_url     = "https://api.typesafe.ai/v1/systemone"
+  # config.model        = "jev-latest"
+  # config.timeout      = 10.0
+  # config.open_timeout = 5.0
+  # config.max_retries  = 2
+end

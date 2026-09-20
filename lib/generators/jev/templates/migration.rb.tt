@@ -1,0 +1,9 @@
+# frozen_string_literal: true
+
+class <%= migration_class_name %> < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  def change
+<% pairs.each do |name, type| -%>
+    jev_attribute :<%= table_name %>, :<%= name %>, :<%= type %>
+<% end -%>
+  end
+end

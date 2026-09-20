@@ -1,0 +1,6 @@
+/.bundle/
+/pkg/
+/tmp/
+Gemfile.lock
+.env
+gemfiles/*.gemfile.lock
