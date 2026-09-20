@@ -19,7 +19,6 @@ module Jev
     def initialize(config: nil, sleeper: nil)
       @config = config || Jev.config
       @sleeper = sleeper || Kernel.method(:sleep)
-      @uri = URI.parse(@config.base_url)
     end
 
     def call(state:, questions:, model: nil)
@@ -75,7 +74,7 @@ module Jev
     end
 
     def execute(authorization, payload)
-      request = Net::HTTP::Post.new(@uri.request_uri)
+      request = Net::HTTP::Post.new(uri.request_uri)
       request["Authorization"] = authorization
       request["Content-Type"] = "application/json"
       request["Accept"] = "application/json"
@@ -83,17 +82,30 @@ module Jev
       connection.request(request)
     end
 
-    def connection
-      store = (Thread.current[CONNECTIONS_KEY] ||= {})
-      http = store[@config.base_url]
-      return http if http&.started?
-
-      store[@config.base_url] = start_connection
+    def uri
+      url = @config.base_url
+      @uri = URI.parse(url) if @uri_source != url
+      @uri_source = url
+      @uri
     end
 
-    def start_connection
-      http = Net::HTTP.new(@uri.host, @uri.port)
-      http.use_ssl = @uri.scheme == "https"
+    def connection_key
+      [@config.base_url, @config.open_timeout, @config.timeout].freeze
+    end
+
+    def connection
+      store = (Thread.current[CONNECTIONS_KEY] ||= {})
+      key = connection_key
+      http = store[key]
+      return http if http&.started?
+
+      store[key] = start_connection(key.first)
+    end
+
+    def start_connection(base_url)
+      uri = URI.parse(base_url)
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = uri.scheme == "https"
       http.open_timeout = @config.open_timeout
       http.read_timeout = @config.timeout
       http.write_timeout = @config.timeout if http.respond_to?(:write_timeout=)
@@ -104,7 +116,7 @@ module Jev
 
     def close_connection
       store = Thread.current[CONNECTIONS_KEY]
-      http = store&.delete(@config.base_url)
+      http = store&.delete(connection_key)
       http.finish if http&.started?
     rescue IOError
       nil
@@ -178,7 +190,7 @@ module Jev
       return unless logger
 
       logger.debug do
-        "Jev POST #{@uri.path} status=#{status} latency=#{latency.round(3)}s attempt=#{attempt}"
+        "Jev POST #{uri.path} status=#{status} latency=#{latency.round(3)}s attempt=#{attempt}"
       end
     end
 

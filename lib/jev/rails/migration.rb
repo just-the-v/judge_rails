@@ -66,10 +66,20 @@ module Jev
       module TableDefinition
         def jev_attribute(name, type, index: true, null: true)
           sidecar = Migration.sidecar_column(name)
-          gin = index && Migration.postgresql?
+          conn = jev_connection
+          gin = index && Migration.postgresql?(conn)
           column name, Migration.value_type(type), null: null, index: index
-          column sidecar, Migration.sidecar_type, null: false, default: {},
-                                                  index: gin ? { using: :gin } : nil
+          column sidecar, Migration.sidecar_type(conn), null: false, default: {},
+                                                        index: gin ? { using: :gin } : nil
+        end
+
+        private
+
+        def jev_connection
+          return unless instance_variable_defined?(:@conn)
+
+          conn = instance_variable_get(:@conn)
+          conn if conn.respond_to?(:adapter_name)
         end
       end
     end

@@ -16,6 +16,17 @@ module Jev
       Question::Score.new(instructions, levels, name: name)
     end
 
+    def decision_band(above, below)
+      low = below || [1.0 - above, above].min
+      unless low <= above
+        raise ArgumentError,
+              "decide needs below (#{low}) to be at or under above (#{above}), " \
+              "otherwise no probability can land in :no or :unsure"
+      end
+
+      low
+    end
+
     def ask(questions, text:, model: nil, client: nil)
       single = single_question?(questions)
       normalized = normalize_questions(questions)

@@ -19,6 +19,7 @@ module Jev
         @callbacks = normalize_callbacks(callbacks, sync)
         @if_condition = if_condition
         @on_error = validate!(on_error.to_sym, ERROR_MODES, "on_error")
+        validate_error_mode!
         freeze
       end
 
@@ -103,6 +104,15 @@ module Jev
 
         mode = callbacks == false ? :disabled : callbacks.to_sym
         validate!(mode, CALLBACK_MODES, "callbacks")
+      end
+
+      def validate_error_mode!
+        return if @on_error == :pass || @callbacks == :inline
+
+        raise ArgumentError,
+              "on_error: #{@on_error.inspect} only applies to a synchronous attribute. " \
+              "#{@name.inspect} is #{@callbacks.inspect}, so the record is already committed by the time " \
+              "the call runs and nothing can be blocked. Pass sync: true, or leave on_error as :pass."
       end
 
       def validate!(value, allowed, label)

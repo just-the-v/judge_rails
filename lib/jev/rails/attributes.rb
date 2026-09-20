@@ -102,7 +102,7 @@ module Jev
         probability = read_attribute(definition.value_column) if probability.nil? && definition.type == "noul"
         raise Jev::Error, "#{name} has not been computed yet" if probability.nil?
 
-        low = below || (1.0 - above)
+        low = Jev.decision_band(above, below)
         return :yes if probability >= above
         return :no if probability <= low
 

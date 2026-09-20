@@ -44,7 +44,12 @@ module Jev
           yield
         ensure
           Thread.current[BUFFER_KEY] = previous
-          flush(buffer)
+          previous ? merge_into(previous, buffer) : flush(buffer)
+        end
+
+        def merge_into(target, buffer)
+          buffer.each { |key, ids| (target[key] ||= []).concat(ids) }
+          nil
         end
 
         def perform(payload, batch_size: 100, client: nil)
@@ -128,12 +133,32 @@ module Jev
         definitions = self.class.jev_attributes.select(&:sync?)
         return if definitions.empty?
 
-        Storage.compute(self, definitions)
-      rescue StandardError => e
-        raise e if Array(definitions).any? { |definition| definition.on_error == :raise }
+        pending = Storage.stale_definitions(self, definitions)
+        return if pending.empty?
 
-        Jobs.log(self.class, e)
-        nil
+        Storage.group_by_state(self, pending).each do |state, group|
+          compute_group_inline(state, group)
+        end
+      end
+
+      def compute_group_inline(state, group)
+        questions = group.to_h { |definition| [definition.name, definition.question] }
+        results = Jev.ask(questions, text: state)
+        group.each { |d| Storage.write(self, d, results[d.name], state: state, results: results) }
+      rescue StandardError => e
+        handle_inline_error(e, group)
+      end
+
+      def handle_inline_error(error, group)
+        modes = group.map(&:on_error)
+        raise error if modes.include?(:raise)
+
+        Jobs.log(self.class, error)
+        return unless modes.include?(:fail)
+
+        names = group.select { |d| d.on_error == :fail }.map(&:name)
+        errors.add(:base, "could not judge #{names.join(", ")}: #{error.class}")
+        throw :abort
       end
 
       def jev_enqueue_refresh

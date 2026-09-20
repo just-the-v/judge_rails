@@ -79,7 +79,7 @@ module Jev
     def decide(above:, below: nil)
       raise ArgumentError, "decide needs a numeric probability" if probability.nil?
 
-      low = below || (1.0 - above)
+      low = Jev.decision_band(above, below)
       return :yes if probability >= above
       return :no if probability <= low
 

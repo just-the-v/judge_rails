@@ -8,7 +8,8 @@ module Jev
     attr_accessor :api_key, :base_url, :model, :timeout, :open_timeout, :max_retries, :logger
 
     def initialize
-      @api_key = ENV.fetch("JEV_API_KEY", nil) || ENV.fetch("TYPESAFE_API_KEY", nil)
+      @api_key = [ENV.fetch("JEV_API_KEY", nil), ENV.fetch("TYPESAFE_API_KEY", nil)]
+                 .find { |value| value && !value.strip.empty? }
       @base_url = ENV.fetch("JEV_BASE_URL", DEFAULT_BASE_URL)
       @model = ENV.fetch("JEV_MODEL", DEFAULT_MODEL)
       @timeout = 10.0
@@ -18,7 +19,7 @@ module Jev
     end
 
     def api_key!
-      return @api_key if @api_key && !@api_key.empty?
+      return @api_key if @api_key && !@api_key.strip.empty?
 
       raise ConfigurationError, "No Jev API key. Set JEV_API_KEY or Jev.configure { |c| c.api_key = ... }"
     end

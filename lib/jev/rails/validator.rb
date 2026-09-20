@@ -67,7 +67,7 @@ class JevValidator < ActiveModel::EachValidator # rubocop:disable Style/OneClass
     validators.each_with_index do |validator, i|
       record.jev_store_judgment(text, validator.instruction, [:ok, results.fetch(:"jev_#{i}")])
     end
-  rescue Jev::Error => e
+  rescue StandardError => e
     validators.each { |validator| record.jev_store_judgment(text, validator.instruction, [:error, e]) }
   end
 
