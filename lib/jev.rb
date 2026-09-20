@@ -14,6 +14,8 @@ require "jev/facade"
 module Jev
   extend Facade
 
+  autoload :Client, "jev/client"
+
   class << self
     def config
       @config ||= Configuration.new

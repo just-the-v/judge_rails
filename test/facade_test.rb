@@ -17,6 +17,11 @@ class FacadeTest < Minitest::Test
     Jev.reset_config!
   end
 
+  def test_client_resolves_without_an_explicit_require
+    assert_kind_of Class, Jev::Client
+    assert_respond_to Jev::Client.new, :call
+  end
+
   def test_a_single_question_returns_a_result
     result = Jev.ask(Jev.noul("Does this convey urgency?"), text: "payouts failing for 3 days")
 

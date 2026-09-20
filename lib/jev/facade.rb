@@ -36,10 +36,7 @@ module Jev
     end
 
     def client
-      @client ||= begin
-        require "jev/client"
-        Client.new
-      end
+      @client ||= Client.new
     end
 
     attr_writer :client
