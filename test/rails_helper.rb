@@ -2,37 +2,37 @@
 
 require "test_helper"
 require "active_record"
-require "jev/rails"
+require "active_job"
+require "judge/rails"
 
-ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
+ActiveJob::Base.queue_adapter = :test
+ActiveJob::Base.logger = Logger.new(nil)
+ActiveRecord::Base.establish_connection(ENV.fetch("DATABASE_URL", "sqlite3::memory:"))
 ActiveRecord::Base.logger = nil
 
 ActiveRecord::Schema.verbose = false
 ActiveRecord::Schema.define do
-  create_table :jev_tickets, force: true do |t|
+  create_table :judge_tickets, force: true do |t|
     t.string :subject
     t.text :body
     t.string :channel
-    t.float :urgency
-    t.json :urgency_jev
-    t.string :intent
-    t.json :intent_jev
-    t.float :frustration
-    t.json :frustration_jev
+    t.judge_attribute :urgency, :noul, index: false
+    t.judge_attribute :intent, :choice, index: false
+    t.judge_attribute :frustration, :score, index: false
     t.timestamps
   end
 end
 
-module JevTestSupport
+module JudgeTestSupport
   QUESTIONS = {
-    urgency: -> { Jev.noul("Does this need a human within the hour?") },
-    intent: -> { Jev.choice("What is this about?", %w[billing technical sales]) },
-    frustration: -> { Jev.score("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"]) }
+    urgency: -> { Judge.noul("Does this need a human within the hour?") },
+    intent: -> { Judge.choice("What is this about?", %w[billing technical sales]) },
+    frustration: -> { Judge.score("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"]) }
   }.freeze
 
   def self.model(&block)
     klass = Class.new(ActiveRecord::Base) do
-      self.table_name = "jev_tickets"
+      self.table_name = "judge_tickets"
     end
     klass.class_eval(&block) if block
     klass
@@ -67,7 +67,7 @@ module JevTestSupport
         "answers" => questions.to_h { |name, q| [name.to_s, answer_for(q, name, state)] },
         "usage" => { "input_tokens" => 10, "output_tokens" => 2 }
       }
-      Jev::ResultSet.from_response(body, questions: questions, latency: 0.01)
+      Judge::ResultSet.from_response(body, questions: questions, latency: 0.01)
     end
 
     def call_count
@@ -82,25 +82,25 @@ module JevTestSupport
 
     def answer_for(question, name, state)
       custom = @responder&.call(question, name, state)
-      custom || JevTestSupport.answer(question.type.to_sym, name)
+      custom || JudgeTestSupport.answer(question.type.to_sym, name)
     end
   end
 end
 
-class JevRailsTest < Minitest::Test
+class JudgeRailsTest < Minitest::Test
   def setup
-    @client = JevTestSupport::RecordingClient.new
-    Jev.client = @client
-    ActiveRecord::Base.connection.execute("DELETE FROM jev_tickets")
+    @adapter = JudgeTestSupport::RecordingClient.new
+    Judge.adapter = @adapter
+    ActiveRecord::Base.connection.execute("DELETE FROM judge_tickets")
   end
 
   def teardown
-    Jev.instance_variable_set(:@client, nil)
+    Judge.instance_variable_set(:@adapter, nil)
   end
 
-  attr_reader :client
+  attr_reader :adapter
 
   def model(&)
-    JevTestSupport.model(&)
+    JudgeTestSupport.model(&)
   end
 end

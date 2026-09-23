@@ -1,0 +1,87 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Arm 4 of BENCHMARK.md: throughput and payload volume, offline, no API key.
+#
+#   bin/bench_batch                    250 rows at the measured 0.300s latency
+#   ROWS=50 LATENCY=0.05 bin/bench_batch    a quick shape check
+#
+# Measures the thread pool and the packing. It cannot measure judgment quality: FakeJev
+# derives its answers from a hash of the question and the state, it does not read the text.
+
+require "bundler/setup"
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+$LOAD_PATH.unshift File.expand_path("../test", __dir__)
+
+require "judge"
+require "judge/batch"
+require "json"
+require "support/fake_jev"
+
+ROW_COUNT = Integer(ENV.fetch("ROWS", 250))
+LATENCY = Float(ENV.fetch("LATENCY", 0.3))
+
+CONFIGURATIONS = [
+  { label: "sequential, 1 thread", rows: 1, concurrency: 1 },
+  { label: "sequential, 8 threads", rows: 1, concurrency: 8 },
+  { label: "lot 20, 8 threads", rows: 20, concurrency: 8 },
+  { label: "lot 20, 16 threads", rows: 20, concurrency: 16 }
+].freeze
+
+def build_items(count)
+  # Mirrors the demo's measured state size: mean 208 characters, subject plus body.
+  (0...count).to_h do |i|
+    [:"ticket#{i}", "Refund request #{i}\n\n#{"Customer text for ticket #{i}. " * 6}"]
+  end
+end
+
+def bytes_sent(server)
+  server.requests.sum { |payload| JSON.generate(payload).bytesize }
+end
+
+server = FakeJev.start
+server.latency = LATENCY
+Judge.reset_config!
+Judge.configure do |c|
+  c.api_key = "bench-key"
+  c.base_url = server.url
+end
+
+items = build_items(ROW_COUNT)
+question = Judge.noul("Does this message need a human to respond within the hour?",
+                      { true: "Money is stuck, a service is broken, or the customer is escalating",
+                        false: "A question, a request, or anything that can wait until tomorrow" })
+
+state_chars = items.values.sum(&:length)
+warn "rows=#{ROW_COUNT} latency=#{LATENCY}s state_total=#{state_chars} chars"
+warn ""
+
+rows = CONFIGURATIONS.map do |config|
+  server.reset!
+  server.latency = LATENCY
+
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  judged = Judge::Batch.judge(items, question, rows: config[:rows], concurrency: config[:concurrency])
+  duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+  raise "lost rows: got #{judged.size} of #{ROW_COUNT}" unless judged.size == ROW_COUNT
+
+  datum = { label: config[:label], requests: server.request_count,
+            seconds: duration, bytes: bytes_sent(server) }
+  warn format("%<label>-24s %<requests>4d req  %<seconds>7.2fs  %<bytes>8d bytes", datum)
+  datum
+end
+
+server.stop
+
+baseline = rows.first
+puts
+puts "| Configuration | Requêtes | Temps mur | Octets envoyés | vs séquentiel 1 thread |"
+puts "|---|---|---|---|---|"
+rows.each do |row|
+  speedup = row[:seconds].zero? ? "-" : format("%.1fx", baseline[:seconds] / row[:seconds])
+  puts format("| %<label>s | %<requests>d | %<seconds>.2f s | %<bytes>d | %<speedup>s |",
+              **row, speedup: speedup)
+end
+puts
+puts "Rows: #{ROW_COUNT}. Injected latency: #{LATENCY}s. FakeJev, no API key, no judgment measured."

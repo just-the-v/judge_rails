@@ -1,18 +1,21 @@
-# jev-in-rails
+# judge_rails
 
 **Semantic judgments as ordinary ActiveRecord attributes.**
 
-[TypeSafe Jev](https://docs.typesafe.ai) answers typed questions about text and returns a calibrated
-probability. This gem turns that into a column on your model: indexable, sortable, paginable, and kept up
-to date for you. It is also a plain Ruby client, with no Rails and nothing outside the standard library.
+A judgment model answers typed questions about text and returns a calibrated probability. This gem
+turns that into a column on your model: indexable, sortable, paginable, and kept up to date for you.
+It is also a plain Ruby client, with no Rails and nothing outside the standard library.
+
+It talks to [TypeSafe Jev](https://docs.typesafe.ai) out of the box, and to anything else through
+one small seam if you ever need it.
 
 ```ruby
 class Ticket < ApplicationRecord
-  jev_source { [subject, body] }
+  judge_source { [subject, body] }
 
-  jev_attribute :urgency,     Jev.noul("Does this need a human within the hour?")
-  jev_attribute :intent,      Jev.choice("What is this about?", %w[billing technical sales])
-  jev_attribute :frustration, Jev.score("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"])
+  judge_attribute :urgency,     Judge.noul("Does this need a human within the hour?")
+  judge_attribute :intent,      Judge.choice("What is this about?", %w[billing technical sales])
+  judge_attribute :frustration, Judge.score("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"])
 end
 
 Ticket.urgency_above(0.8).intent_is("billing").order(frustration: :desc).limit(20)
@@ -23,41 +26,66 @@ Three judgments cost one API call per record. That query costs none.
 ## Install
 
 ```ruby
-gem "jev-in-rails"
+gem "judge_rails"
 ```
 
 ```sh
-bin/rails generate jev:install
-bin/rails generate jev:attribute Ticket urgency:noul intent:choice frustration:score
+bin/rails generate judge:install
+bin/rails generate judge:attribute Ticket urgency:noul intent:choice frustration:score
 bin/rails db:migrate
 ```
 
-Set `JEV_API_KEY` in the environment, or `jev.api_key` in Rails credentials.
+Set `JEV_API_KEY` in the environment, or `judge.api_key` in Rails credentials. `TYPESAFE_API_KEY`
+works too.
+
+**That is the whole setup.** There is nothing to choose and nothing to wire: the default adapter is
+TypeSafe Jev, and it is used unless you say otherwise. [Providers](#providers) is there if you ever
+need something else, and you can ignore it until then.
+
+### Two things worth knowing first
+
+**A key is not automatic.** TypeSafe Jev is reached through an early-access waitlist, so
+`bundle install` will not by itself get you a working gem. You can still evaluate the idea today:
+`judge_rails_demo` boots with **250 support tickets already judged**, seeded from a committed file,
+and needs no key at all.
+
+```sh
+bin/rails db:prepare db:seed   # 250 judged tickets, no API call
+bin/rails server
+```
+
+**Pin `json` below 3 if you are on activesupport 8.1.** It calls `::JSON.parse(json, options)` with a
+positional hash, which json 3.x rejects. It only surfaces on a jsonb column with a non-nil default,
+which is exactly what the sidecar is, so it looks like a bug in this gem and is not:
+
+```ruby
+gem "json", "< 3"
+```
 
 ## Questions
 
 Three types. Each one is a frozen value object you can hold, pass around and compare.
 
 ```ruby
-Jev.noul("Does this convey urgency?")
-Jev.noul("Does this convey urgency?", { true: "Time-sensitive", false: "Can wait" })
+Judge.noul("Does this convey urgency?")
+Judge.noul("Does this convey urgency?", { true: "Time-sensitive", false: "Can wait" })
 
-Jev.choice("Which team?", %w[billing technical sales])
-Jev.choice("Which team?", { billing: "Refunds, invoices", technical: "Bugs, outages" })
+Judge.choice("Which team?", %w[billing technical sales])
+Judge.choice("Which team?", { billing: "Refunds, invoices", technical: "Bugs, outages" })
 
-Jev.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"])
-Jev.score("How urgent?", 1..5)
+Judge.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"])
+Judge.score("How urgent?", 1..5)
 ```
 
 Criteria are optional on a noul and sharpen the judgment. A question fingerprints itself, which is what
 makes invalidation automatic later.
 
 ```ruby
-question = Jev.choice("Which team?", %w[billing technical sales spam])
+question = Judge.choice("Which team?", %w[billing technical sales spam])
 question.digest    # => "9e08ebfeb6e0e0fa"   over type, wording and criteria
 question.options   # => ["billing", "technical", "sales", "spam"]
 
-Jev.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"]).max_level  # => 3
+Judge.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"]).max_level  # => 3
 ```
 
 ## Asking
@@ -65,15 +93,15 @@ Jev.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angr
 One question in, one `Result` out. Many questions in, one `ResultSet` out, and one HTTP request.
 
 ```ruby
-Jev.ask("does this sound angry?", text: ticket.body)
-# => #<Jev::Result :answer noul value=0.96 p=0.96>
+Judge.ask("does this sound angry?", text: ticket.body)
+# => #<Judge::Result :answer noul value=0.96 p=0.96>
 
-results = Jev.ask({
-  urgency:     Jev.noul("Does this need a human within the hour?"),
-  intent:      Jev.choice("What is this about?", %w[billing technical sales spam]),
-  frustration: Jev.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"])
+results = Judge.ask({
+  urgency:     Judge.noul("Does this need a human within the hour?"),
+  intent:      Judge.choice("What is this about?", %w[billing technical sales spam]),
+  frustration: Judge.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"])
 }, text: ticket.body)
-# => #<Jev::ResultSet [:urgency, :intent, :frustration] model="jev-1.13.0" latency=0.69>
+# => #<Judge::ResultSet [:urgency, :intent, :frustration] model="jev-1.13.0" latency=0.69>
 ```
 
 A bare String is treated as a noul. An Array works too, named by each question or positionally.
@@ -111,20 +139,18 @@ end
 
 ## Attributes
 
-`jev_attribute` stores a judgment as a real column, plus a `<name>_jev` jsonb sidecar holding its
-provenance. `jev_source` sets the text once, so every attribute sharing it travels in one call per record.
+`judge_attribute` stores a judgment as a real column, plus a `<name>_judge` jsonb sidecar holding its
+provenance. `judge_source` sets the text once, so every attribute sharing it travels in one call per record.
 
 ```ruby
 class Ticket < ApplicationRecord
-  jev_source { [subject, body] }
+  judge_source { [subject, body] }
 
-  jev_attribute :urgency,     Jev.noul("Does this need a human within the hour?")
-  jev_attribute :intent,      Jev.choice("What is this about?", %w[billing technical sales spam])
-  jev_attribute :frustration, Jev.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"])
+  judge_attribute :urgency,     Judge.noul("Does this need a human within the hour?")
+  judge_attribute :intent,      Judge.choice("What is this about?", %w[billing technical sales spam])
+  judge_attribute :frustration, Judge.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"])
 
-  jev_attribute :spam, Jev.noul("Is this spam?"),
-                source: :body,
-                if_condition: ->(ticket) { ticket.channel == "web" }
+  judge_attribute :spam, Judge.noul("Is this spam?"), source: :body
 end
 ```
 
@@ -137,11 +163,11 @@ ticket.urgency_probability  # => 0.96
 ticket.intent_confidence    # => 1.0
 ticket.urgency_computed_at  # => 2026-09-20 11:42:10 UTC
 ticket.urgency_stale?       # => false
-ticket.urgency_jev_meta
+ticket.urgency_judge_meta
 # => {"digest" => ..., "state_digest" => ..., "computed_at" => ..., "probability" => 0.96,
 #     "probabilities" => {...}, "model" => "jev-1.13.0", "latency" => 0.69}
 
-ticket.jev_decide(:urgency, above: 0.9, below: 0.1)   # => :yes
+ticket.judge_decide(:urgency, above: 0.9, below: 0.1)   # => :yes
 ```
 
 ## Invalidation
@@ -150,26 +176,39 @@ Two things make a judgment stale: the source text changing, and the question cha
 by comparing digests, which costs no API call.
 
 ```ruby
-ticket.jev_stale?    # => false
+ticket.judge_stale?    # => false
 ticket.body = "actually, all sorted, thanks"
-ticket.jev_stale?    # => true
-ticket.jev_pending   # => [:urgency, :intent, :frustration]
+ticket.judge_stale?    # => true
+ticket.judge_pending   # => [:urgency, :intent, :frustration]
 
-ticket.jev_refresh   # recompute in memory, returns the names it touched
-ticket.jev_refresh!  # recompute and save
-ticket.jev_refresh(:urgency, force: true)
+ticket.judge_refresh   # recompute in memory, returns the names it touched
+ticket.judge_refresh!  # recompute and save
+ticket.judge_refresh(:urgency, force: true)
 ```
 
 Editing the wording of a question moves its digest, so every stored judgment for it goes stale on its own.
 There is no version number to remember to bump.
 
+Pinning a model does the same. Changing the pin makes every judgment made under the old one stale, and
+two attributes on the same text but different models travel in two calls instead of one.
+
+```ruby
+judge_attribute :urgency, Judge.noul("..."), model: "jev-1.13.0"   # the rest follow config.model
+```
+
+Blank source text has nothing to judge. The value and its sidecar are cleared, no call is made, and
+the attribute is not stale.
+
+A source should depend only on content. One that reads `updated_at` or `lock_version` changes on every
+save, including the gem's own, so the judgment stays stale. The gem never re-enqueues a refresh from its
+own save, so that costs a stale flag rather than a loop.
+
 ## When it runs
 
 ```ruby
-jev_attribute :urgency, Jev.noul("...")                      # async after_commit (default)
-jev_attribute :urgency, Jev.noul("..."), sync: true          # inline, during the save
-jev_attribute :urgency, Jev.noul("..."), callbacks: :queue   # batched bulk job
-jev_attribute :urgency, Jev.noul("..."), callbacks: false    # manual only
+judge_attribute :urgency, Judge.noul("...")                      # async after_commit (default)
+judge_attribute :urgency, Judge.noul("..."), sync: true          # inline, during the save
+judge_attribute :urgency, Judge.noul("..."), callbacks: false    # manual only
 ```
 
 Async is the default on purpose. An HTTP call inside a save holds a pooled database connection for the
@@ -177,24 +216,11 @@ whole request, so a slow vendor exhausts the pool and takes down more than the f
 changes nothing relevant enqueues nothing, and ActiveJob is optional: the enqueuer is injectable.
 
 ```ruby
-Jev::Rails::Jobs.batch do        # coalesce :queue attributes into one job
-  tickets.each(&:save!)
-end
-
-ticket.jev_refresh_later(:urgency)
-
-summary = Ticket.jev_refresh_all(batch_size: 100, resume: true)
-summary.to_h   # => {records: 250, computed: 250, skipped: 0, failed: 0, calls: 250}
+ticket.judge_refresh_later(:urgency)
 ```
 
-Only `sync: true` attributes can honour `on_error`, since anything else has already committed. Declaring
-`on_error` on an async attribute raises at load time rather than doing nothing.
-
-```ruby
-jev_attribute :urgency, Jev.noul("..."), sync: true, on_error: :pass   # default, save goes through
-jev_attribute :urgency, Jev.noul("..."), sync: true, on_error: :fail   # save is blocked
-jev_attribute :urgency, Jev.noul("..."), sync: true, on_error: :raise  # error propagates
-```
+`sync: true` buys one thing, the right to block a save when the judgment fails. That, `if_condition`
+and bulk backfill are in [ADVANCED.md](ADVANCED.md).
 
 ## Querying
 
@@ -211,14 +237,14 @@ Ticket.intent_not("spam")                      # raises on an option you never d
 
 Ticket.frustration_at_least("Frustrated")      # by name
 Ticket.frustration_at_most(1)                  # or by index
-Ticket.frustration_level(2)
+Ticket.frustration_level(2)                    # on numeric levels like 1..5, an Integer is the label
 
-Ticket.order_by_urgency(:desc)                 # or plain order(urgency: :desc)
-Ticket.jev_computed
-Ticket.jev_uncomputed
+Ticket.order_by_urgency(:desc)                 # NULLs where your database puts them: first on PostgreSQL
+Ticket.judge_computed
+Ticket.judge_uncomputed
 ```
 
-The bands partition the table exactly the way `jev_decide` does, so SQL and Ruby never disagree at the
+The bands partition the table exactly the way `judge_decide` does, so SQL and Ruby never disagree at the
 threshold.
 
 ```ruby
@@ -232,13 +258,29 @@ For a question you never declared, there is an ad-hoc path. It loads records, ju
 Array rather than a Relation, because the work has already happened.
 
 ```ruby
-Ticket.where(channel: "chat").jev_filter("mentions a chargeback", limit: 500)   # => [Ticket, ...]
-Ticket.jev_map("how angry is this?", limit: 200)                                # => {ticket => Result}
-Ticket.jev_sort("most likely to churn", limit: 200, dir: :desc)                 # => [Ticket, ...]
+Ticket.where(channel: "chat").judge_filter("mentions a chargeback", limit: 500)   # => [Ticket, ...]
+Ticket.judge_map("how angry is this?", limit: 200)                                # => {ticket => Result}
+Ticket.judge_sort("most likely to churn", limit: 200, dir: :desc)                 # => [Ticket, ...]
 
-Ticket.jev_filter("mentions a chargeback")
-# ArgumentError: jev_filter requires limit:. It makes one API call per row.
+Ticket.judge_filter("mentions a chargeback")
+# ArgumentError: judge_filter requires limit:. It makes one API call per row.
 ```
+
+One row per request is not an accident, it is the only shape that keeps the judgment intact: Jev
+scores each question against the whole state, so putting several records in one request makes every
+answer a judgment about a mostly irrelevant document. Measured on 250 tickets, packing subjects cost
+nine to fourteen points of decision agreement. `BENCHMARK.md` has the protocol and the numbers.
+
+What is free is running those requests at the same time. The request is unchanged byte for byte, so
+nothing is traded for the speed.
+
+```ruby
+Ticket.judge_filter("mentions a chargeback", limit: 500, concurrency: 16)
+Judge.configure { |c| c.concurrency = 16 }   # or set the default once
+```
+
+Measured against the live API on 100 records: 6.9x faster at the default of 8 threads, 18.4x at 32,
+with input tokens identical to the unit at every level.
 
 ## Validations
 
@@ -246,17 +288,21 @@ An ordinary ActiveModel validation that happens to ask a model.
 
 ```ruby
 class Ticket < ApplicationRecord
-  validates :body, jev: { refute: "contains a phone number or email address" }
-  validates :body, jev: { assert: "is written in English", threshold: 0.8, message: "must be in English" }
-  validates :body, jev: { refute: "is spam", on_error: :fail }, if: -> { channel == "web" }
+  validates :body, judge: { refute: "contains a phone number or email address" }
+  validates :body, judge: { assert: "is written in English", threshold: 0.8, message: "must be in English" }
+  validates :body, judge: { refute: "is spam", on_error: :fail }, if: -> { channel == "web" }
 end
 
 ticket.valid?
 ticket.errors.full_messages            # => ["Body matched \"contains a phone number or email address\""]
-ticket.jev_validation_results          # the judgment behind each verdict, never persisted
+ticket.judge_validation_results          # the judgment behind each verdict, never persisted
 ```
 
-Several jev validations on the same attribute travel in one call. A blank attribute costs nothing.
+Several judge validations on the same attribute travel in one call. A blank attribute costs nothing.
+A record remembers each judgment by its text, so saving it again without changing the text costs
+nothing either. `reload` forgets them.
+
+It works on a plain `ActiveModel::Model` form object too, one call per validation.
 
 `on_error` defaults to `:pass`, so a TypeSafe outage cannot stop your users saving. **That default is
 wrong for moderation**: a check that blocks spam or personal data and then fails open lets through
@@ -265,76 +311,191 @@ exactly what it exists to catch. Use `on_error: :fail` there.
 ## Migrations and generators
 
 ```ruby
-class AddJevToTickets < ActiveRecord::Migration[8.0]
+class AddJudgeToTickets < ActiveRecord::Migration[8.0]
   def change
-    jev_attribute :tickets, :urgency, :noul      # float + urgency_jev + indexes
-    jev_attribute :tickets, :intent, :choice     # string + intent_jev
-    jev_attribute :tickets, :frustration, :score # float + frustration_jev
+    judge_attribute :tickets, :urgency, :noul      # float + urgency_judge + indexes
+    judge_attribute :tickets, :intent, :choice     # string + intent_judge
+    judge_attribute :tickets, :frustration, :score # float + frustration_judge
   end
 end
 
 create_table :tickets do |t|
-  t.jev_attribute :urgency, :noul
+  t.judge_attribute :urgency, :noul
 end
 ```
 
 Built from `add_column` and `add_index`, so it is reversible inside `change`. The sidecar is `jsonb` with
 a GIN index on PostgreSQL and `json` elsewhere, chosen from the connection actually running the migration.
+CI runs the suite on SQLite and MySQL, and the demo runs on PostgreSQL. MySQL rejects a default on a
+JSON column, so there the sidecar is nullable with no default, and a nil sidecar reads as `{}`.
 
 ```sh
-bin/rails generate jev:install
-bin/rails generate jev:attribute Ticket urgency:noul intent:choice frustration:score
+bin/rails generate judge:install
+bin/rails generate judge:attribute Ticket urgency:noul intent:choice frustration:score
 ```
+
+## What it costs
+
+A judged record is a billed network call. The gem's job is to make that number predictable.
+
+| | |
+|---|---|
+| Per record, however many questions | **one** call. `judge_source` groups every attribute sharing a text |
+| A save that changes nothing relevant | **zero** calls. Digests are compared first |
+| Any query over judged columns | **zero** calls. They are ordinary indexed columns |
+| `judge_filter` / `judge_map` / `judge_sort` | **one call per row**, which is why `limit:` is mandatory |
+| A request, before it carries anything | ~326 input tokens of fixed overhead |
+| Each additional question in a request | ~24 input tokens |
+
+Measured on 2026-09-21 against the live model; `BENCHMARK.md` carries the method. Those last two
+lines are the whole argument for `judge_source`: three separate calls pay the overhead three times and
+answer exactly the same thing.
+
+Timeouts and retries are yours to set, and the defaults are deliberately short:
+
+```ruby
+Judge.configure do |config|
+  config.timeout      = 10.0   # seconds, per request
+  config.open_timeout = 5.0
+  config.max_retries  = 2      # 429, 5xx and transport errors, jittered
+  config.max_retry_wait = 10.0 # a longer Retry-After raises RateLimitError instead of sleeping
+end
+```
+
+An async refresh that fails on a 429, a 5xx or a transport error raises out of `RefreshJob`, so
+ActiveJob retries it with backoff, five attempts. Any other failure is logged and dropped.
+
+Every request emits `request.judge` through `ActiveSupport::Notifications` when it is loaded, so an APM
+sees them without any wiring:
+
+```ruby
+ActiveSupport::Notifications.subscribe("request.judge") do |*args|
+  event = ActiveSupport::Notifications::Event.new(*args)
+  event.payload   # => {model:, questions:, request_bytes:, latency:, input_tokens:, output_tokens:}
+end
+```
+
+`model`, `questions` and `request_bytes` are always there. `latency` and the two token counts are
+added once the response parses, so a **failed** request carries only the first three, plus the
+`:exception` pair ActiveSupport adds itself. Read them with `dig`, not `fetch`.
+
+One event spans the whole call, retries included, not one per HTTP attempt.
+
+The event carries sizes and counts. It never carries the state or the key.
 
 ## Client and errors
 
 ```ruby
-Jev.configure do |config|
+Judge.configure do |config|
   config.api_key      = ENV["JEV_API_KEY"]   # or TYPESAFE_API_KEY
   config.model        = "jev-latest"
   config.timeout      = 10.0
   config.open_timeout = 5.0
   config.max_retries  = 2
+  config.max_retry_wait = 10.0
   config.logger       = Rails.logger
 end
 ```
 
 `Net::HTTP`, one persistent connection per thread keyed on URL and timeouts, jittered exponential backoff
-on 429 and 5xx, `Retry-After` honoured, no retry on any other 4xx. Nothing about the key or the payload is
-ever logged.
+on 429, 5xx and transport errors, `Retry-After` honoured up to `max_retry_wait`, no retry on any other 4xx.
+Nothing about the key or the payload is ever logged.
 
 ```ruby
-Jev::Error
-├── Jev::ConfigurationError    # no usable key
-├── Jev::TransportError        # timeout, reset, DNS
-├── Jev::InvalidResponseError  # body was not what the API promises
-└── Jev::APIError              # carries #status and #body
-    ├── Jev::AuthenticationError  # 401, 403
-    ├── Jev::InvalidRequestError  # 400, 404, 422
-    ├── Jev::RateLimitError       # 429, carries #retry_after
-    └── Jev::ServerError          # 5xx
+Judge::Error
+├── Judge::ConfigurationError    # no usable key
+├── Judge::TransportError        # timeout, reset, DNS, TLS
+├── Judge::InvalidResponseError  # body was not what the API promises
+└── Judge::APIError              # carries #status and #body
+    ├── Judge::AuthenticationError  # 401, 403
+    ├── Judge::InvalidRequestError  # 400, 404, 422
+    ├── Judge::RateLimitError       # 429, carries #retry_after
+    └── Judge::ServerError          # 5xx
 ```
 
 A per-request client, for a key you do not want to keep:
 
 ```ruby
-config = Jev::Configuration.new
+config = Judge::Configuration.new
 config.api_key = params[:api_key]
-Jev.ask(questions, text: text, client: Jev::Client.new(config: config))
+Judge.ask(questions, text: text, adapter: Judge::Client.new(config: config))
 ```
+
+## Providers
+
+**Skip this unless you need it.** TypeSafe Jev is the default and needs no configuration: set a key
+and everything above works. This section is the escape hatch.
+
+Everything above goes through one seam. An adapter is any object answering a single method:
+
+```ruby
+call(state:, questions:, model:) -> Judge::ResultSet
+```
+
+`questions` is a Hash of `{name => Judge::Question}`. The adapter reaches a provider however it
+likes and builds each answer from typed values, so **no adapter ever writes or reads a wire
+format**:
+
+```ruby
+class LayaAdapter
+  def call(state:, questions:, model: nil)
+    answers = MyLayaService.judge(state, questions.transform_values(&:to_payload))
+
+    results = questions.map do |name, question|
+      Judge::Result.from_values(name: name, question: question, type: question.type,
+                                value: answers.fetch(name).value,
+                                confidence: answers.fetch(name).confidence,
+                                probabilities: answers.fetch(name).distribution)
+    end
+    Judge::ResultSet.new(results, model: "laya-1")
+  end
+end
+
+Judge::Adapter.register(:laya) { LayaAdapter.new }
+Judge.configure { |c| c.adapter = :laya }
+```
+
+The default is `:jev` and stays `:jev` until you change it. `JUDGE_ADAPTER` picks one from the
+environment, and `adapter:` overrides it for a single call, which is how the test suite installs a
+recorder.
+
+### You may not need an adapter at all
+
+The portable thing is the protocol, not this registry. Anything already serving this shape works
+with the default adapter and a changed `base_url`, with no code:
+
+```
+POST <base_url>
+Authorization: Bearer <key>
+
+{"state": "...",
+ "model": "...",
+ "questions": {"urgency": {"type": "noul", "instructions": "...", "criteria": {...}}}}
+```
+
+```json
+{"model": "...",
+ "answers": {"urgency": {"type": "noul", "noul": 0.96}},
+ "usage": {"input_tokens": 430, "output_tokens": 73}}
+```
+
+`choice` answers carry `choice`, `confidence` and `probabilities`; `score` answers carry `score`,
+`confidence`, `legend` and `probabilities`.
 
 ## Without Rails
 
 ```ruby
-require "jev"        # questions, results, client. No ActiveRecord, nothing outside stdlib
-require "jev/rails"  # the ActiveRecord layer
+require "judge"        # questions, results, client, thread pool. Loads nothing from Rails
+require "judge/rails"  # the ActiveRecord layer
 ```
 
-`net/http` is not loaded until you make a call.
+`require "judge"` pulls in nothing but the standard library: no ActiveRecord, no ActiveSupport, and
+`net/http` is not loaded until you make a call. The gemspec declares `activerecord` and
+`activesupport` because `require "judge/rails"` needs them, which is the whole dependency list.
 
 ## Demo
 
-`jev-in-rails-demo` is a Rails app with 250 support tickets judged offline, a datatable built on these
+`judge_rails_demo` is a Rails app with 250 support tickets judged offline, a datatable built on these
 scopes, and six pages explaining the escalation band, one-call batching, self-invalidation, per-request
 keys, ad-hoc filtering and validation failure modes.
 

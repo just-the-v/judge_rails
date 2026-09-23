@@ -2,11 +2,17 @@
 
 source "https://rubygems.org"
 
+gem "activejob", "~> 8.1.0"
 gem "activerecord", "~> 8.1.0"
 gem "activesupport", "~> 8.1.0"
 gem "json", "< 3"
 gem "minitest", "~> 5.20"
+gem "railties", "~> 8.1.0"
 gem "rake", "~> 13.0"
 gem "sqlite3", "~> 2.1"
+
+group :mysql, optional: true do
+  gem "mysql2", "~> 0.5"
+end
 
 gemspec path: ".."

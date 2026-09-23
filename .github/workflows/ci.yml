@@ -33,3 +33,28 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
       - run: bundle exec rake test
+
+  mysql:
+    runs-on: ubuntu-latest
+    name: test ruby 3.3 / rails 8.1 / mysql 8.4
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: judge_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/gemfiles/rails_8.1.gemfile
+      BUNDLE_WITH: mysql
+      DATABASE_URL: mysql2://root@127.0.0.1:3306/judge_test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - run: bundle exec rake test

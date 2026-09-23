@@ -1,0 +1,83 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Arm 0 of BENCHMARK.md: does latency grow with the number of questions in one request?
+#
+# Everything the batching buys on wall clock rests on the answer being "no". The vendor says it
+# barely moves; the wiki carries that at confidence: medium and it has never been run here.
+#
+#   TYPESAFE_API_KEY=... bin/arm0_latency
+#
+# Calls the real API. About 90 requests. Never run from a test.
+
+require "bundler/setup"
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+
+require "judge"
+
+COUNTS = [1, 2, 5, 10, 20, 40].freeze
+REPS = Integer(ENV.fetch("REPS", 3))
+
+STATE = <<~TICKET.strip
+  Charged twice for the same invoice
+
+  We were billed twice for invoice 4471 on the same day and the second charge has not been
+  reversed. This is the third time I am writing about it. The money left our account on Monday
+  and our finance lead needs it back before the end of the week.
+TICKET
+
+abort "set TYPESAFE_API_KEY or JEV_API_KEY" if Judge.config.api_key.nil?
+
+def questions_for(count)
+  (0...count).to_h do |i|
+    [:"row#{i}", Judge.noul("Answer only about the row whose id is #{i}. Is this message urgent?",
+                            name: :"row#{i}")]
+  end
+end
+
+warn "arm 0: #{COUNTS.size} points x #{REPS} reps = #{COUNTS.sum { REPS }} requests"
+warn "state: #{STATE.length} chars"
+warn ""
+
+rows = COUNTS.map do |count|
+  samples = Array.new(REPS) do
+    set = Judge.ask(questions_for(count), text: STATE)
+    { latency: set.latency, input: set.usage&.input_tokens.to_i, answers: set.size }
+  end
+
+  latencies = samples.map { |s| s[:latency] }.sort
+  median = latencies[latencies.size / 2]
+  inputs = samples.map { |s| s[:input] }
+  datum = {
+    count: count,
+    median: median,
+    spread: latencies.last - latencies.first,
+    input: inputs.sum / inputs.size,
+    answers: samples.map { |s| s[:answers] }.uniq
+  }
+  warn format("N=%<count>-3d median %<median>.3fs  spread %<spread>.3fs  " \
+              "input %<input>d tokens  answers %<answers>s", **datum)
+  datum
+end
+
+baseline = rows.first
+
+puts
+puts "| N questions | Latence médiane | Écart | Tokens d'entrée | Tokens / question | vs N=1 |"
+puts "|---|---|---|---|---|---|"
+rows.each do |row|
+  puts format("| %<count>d | %<median>.3f s | %<spread>.3f s | %<input>d | %<per>.0f | %<ratio>.2fx |",
+              **row,
+              per: row[:input].to_f / row[:count],
+              ratio: row[:median] / baseline[:median])
+end
+puts
+puts "Reps per point: #{REPS}. Model: #{Judge.config.model}. State: #{STATE.length} chars."
+
+ratio = rows.last[:median] / baseline[:median]
+twenty = rows.find { |r| r[:count] == 20 }
+gate = twenty[:median] / baseline[:median]
+puts
+puts format("Gate: latency at N=20 is %.2fx N=1 (protocol suspends the campaign above 10x).", gate)
+puts gate > 10 ? "VERDICT: batching buys cost only, not wall clock." : "VERDICT: proceed to arms 1 to 3."
+puts format("At N=40 the ratio is %.2fx.", ratio)

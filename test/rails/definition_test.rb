@@ -2,11 +2,11 @@
 
 require "rails_helper"
 
-class DefinitionTest < JevRailsTest
-  def define(**opts)
-    Jev::Rails::Definition.new(
-      name: :urgency, question: Jev.noul("Does this need a human within the hour?"),
-      source: :body, **opts
+class DefinitionTest < JudgeRailsTest
+  def define(**)
+    Judge::Rails::Definition.new(
+      name: :urgency, question: Judge.noul("Does this need a human within the hour?"),
+      source: :body, **
     )
   end
 
@@ -18,7 +18,7 @@ class DefinitionTest < JevRailsTest
     d = define
 
     assert_equal :urgency, d.value_column
-    assert_equal :urgency_jev, d.sidecar_column
+    assert_equal :urgency_judge, d.sidecar_column
     assert_equal "noul", d.type
   end
 
@@ -29,8 +29,8 @@ class DefinitionTest < JevRailsTest
   def test_source_accepts_a_symbol_or_a_callable
     assert_equal "abc", define.state_for(record(body: "abc"))
 
-    joined = Jev::Rails::Definition.new(
-      name: :urgency, question: Jev.noul("urgent?"),
+    joined = Judge::Rails::Definition.new(
+      name: :urgency, question: Judge.noul("urgent?"),
       source: ->(r) { [r.subject, r.body] }
     )
     r = model.new(subject: "S", body: "B")
@@ -39,8 +39,8 @@ class DefinitionTest < JevRailsTest
   end
 
   def test_blank_source_parts_are_dropped
-    joined = Jev::Rails::Definition.new(name: :urgency, question: Jev.noul("urgent?"),
-                                        source: ->(r) { [r.subject, r.body] })
+    joined = Judge::Rails::Definition.new(name: :urgency, question: Judge.noul("urgent?"),
+                                          source: ->(r) { [r.subject, r.body] })
 
     assert_equal "B", joined.state_for(model.new(subject: "  ", body: "B"))
   end
@@ -49,7 +49,6 @@ class DefinitionTest < JevRailsTest
     assert_equal :async, define.callbacks
     refute_predicate define, :sync?
     assert_predicate define(sync: true), :sync?
-    assert_equal :queue, define(callbacks: :queue).callbacks
     assert_equal :disabled, define(callbacks: false).callbacks
     refute_predicate define(callbacks: false), :enqueue?
   end
@@ -90,11 +89,12 @@ class DefinitionTest < JevRailsTest
 
   def test_cast_per_question_type
     noul = define
-    choice = Jev::Rails::Definition.new(name: :intent, question: Jev.choice("what?", %w[a b]), source: :body)
-    score = Jev::Rails::Definition.new(name: :frustration,
-                                       question: Jev.score("how?", %w[calm angry]), source: :body)
-    set = client.call(state: "x", questions: { urgency: noul.question, intent: choice.question,
-                                               frustration: score.question })
+    choice = Judge::Rails::Definition.new(name: :intent, question: Judge.choice("what?", %w[a b]),
+                                          source: :body)
+    score = Judge::Rails::Definition.new(name: :frustration,
+                                         question: Judge.score("how?", %w[calm angry]), source: :body)
+    set = adapter.call(state: "x", questions: { urgency: noul.question, intent: choice.question,
+                                                frustration: score.question })
 
     assert_in_delta 0.91, noul.cast(set[:urgency])
     assert_equal "billing", choice.cast(set[:intent])
@@ -103,7 +103,7 @@ class DefinitionTest < JevRailsTest
 
   def test_sidecar_captures_provenance
     d = define
-    set = client.call(state: "x", questions: { urgency: d.question })
+    set = adapter.call(state: "x", questions: { urgency: d.question })
     meta = d.sidecar(set[:urgency], state_digest: d.state_digest("x"), model: "jev-test-1", latency: 0.01)
 
     assert_equal d.digest, meta["digest"]
@@ -114,11 +114,11 @@ class DefinitionTest < JevRailsTest
   end
 
   def test_registry_lookup_and_inheritance
-    parent = Jev::Rails::Registry.new
+    parent = Judge::Rails::Registry.new
     parent.add(define)
     child = parent.inherit
-    child.add(Jev::Rails::Definition.new(name: :intent, question: Jev.choice("what?", %w[a b]),
-                                         source: :body))
+    child.add(Judge::Rails::Definition.new(name: :intent, question: Judge.choice("what?", %w[a b]),
+                                           source: :body))
 
     assert_equal %i[urgency], parent.names
     assert_equal %i[urgency intent], child.names

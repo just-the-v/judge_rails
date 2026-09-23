@@ -1,5 +1,5 @@
 AllCops:
-  TargetRubyVersion: 3.1
+  TargetRubyVersion: 3.2
   NewCops: enable
   Exclude:
     - "vendor/**/*"
@@ -19,5 +19,6 @@ Style/StringLiteralsInInterpolation:
 Lint/BooleanSymbol:
   Exclude:
     - "test/**/*"
+    - "bin/**/*"
 Style/HashLikeCase:
   Enabled: false

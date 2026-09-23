@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "jev/client"
+require "judge/client"
 require "socket"
 
 class StubServer
@@ -117,7 +117,7 @@ class ClientTest < Minitest::Test
   end
 
   def config_for(server, **overrides)
-    config = Jev::Configuration.new
+    config = Judge::Configuration.new
     config.api_key = "test-key"
     config.base_url = server.url
     config.model = "jev-latest"
@@ -129,16 +129,16 @@ class ClientTest < Minitest::Test
   end
 
   def client_for(server, **overrides)
-    Jev::Client.new(config: config_for(server, **overrides), sleeper: ->(s) { @slept << s })
+    Judge::Client.new(config: config_for(server, **overrides), sleeper: ->(s) { @slept << s })
   end
 
   def questions
     {
-      is_urgent: Jev.noul("Does this need an answer today?",
-                          { "true" => "Needs an answer today", "false" => "Can wait" }),
-      department: Jev.choice("Which team should handle it?",
-                             { "billing" => "Invoices and payments", "technical" => "Bugs and outages" }),
-      frustration: Jev.score("How upset is the customer?", ["Calm", "Frustrated", "Very angry"])
+      is_urgent: Judge.noul("Does this need an answer today?",
+                            { "true" => "Needs an answer today", "false" => "Can wait" }),
+      department: Judge.choice("Which team should handle it?",
+                               { "billing" => "Invoices and payments", "technical" => "Bugs and outages" }),
+      frustration: Judge.score("How upset is the customer?", ["Calm", "Frustrated", "Very angry"])
     }
   end
 
@@ -146,7 +146,7 @@ class ClientTest < Minitest::Test
     server = ok_server
     results = client_for(server).call(state: "My invoice is wrong again!", questions: questions)
 
-    assert_instance_of Jev::ResultSet, results
+    assert_instance_of Judge::ResultSet, results
     assert_equal "jev-1.13.0", results.model
     assert_equal 503, results.usage.total
     assert_in_delta 0.96, results[:is_urgent].value
@@ -224,7 +224,7 @@ class ClientTest < Minitest::Test
   def test_server_errors_exhaust_retries
     server = serve { |_req, _i| [503, {}, '{"error":{"message":"upstream down"}}'] }
 
-    error = assert_raises(Jev::ServerError) do
+    error = assert_raises(Judge::ServerError) do
       client_for(server).call(state: "hi", questions: questions)
     end
 
@@ -237,7 +237,7 @@ class ClientTest < Minitest::Test
   def test_unauthorized_is_not_retried
     server = serve { |_req, _i| [401, {}, '{"error":"bad key"}'] }
 
-    error = assert_raises(Jev::AuthenticationError) do
+    error = assert_raises(Judge::AuthenticationError) do
       client_for(server).call(state: "hi", questions: questions)
     end
 
@@ -252,7 +252,7 @@ class ClientTest < Minitest::Test
       [200, {}, LIVE_RESPONSE]
     end
 
-    assert_raises(Jev::TransportError) do
+    assert_raises(Judge::TransportError) do
       client_for(server, timeout: 0.1, max_retries: 0).call(state: "hi", questions: questions)
     end
   end
@@ -260,7 +260,7 @@ class ClientTest < Minitest::Test
   def test_malformed_json_raises_invalid_response_error
     server = serve { |_req, _i| [200, {}, "not json at all"] }
 
-    assert_raises(Jev::InvalidResponseError) do
+    assert_raises(Judge::InvalidResponseError) do
       client_for(server).call(state: "hi", questions: questions)
     end
   end
@@ -268,7 +268,7 @@ class ClientTest < Minitest::Test
   def test_missing_api_key_raises_configuration_error
     server = ok_server
 
-    assert_raises(Jev::ConfigurationError) do
+    assert_raises(Judge::ConfigurationError) do
       client_for(server, api_key: nil).call(state: "hi", questions: questions)
     end
 
@@ -287,5 +287,104 @@ class ClientTest < Minitest::Test
     assert_includes lines.first, "status=429"
     assert_includes lines.last, "attempt=2"
     refute(lines.any? { |l| l.include?("test-key") })
+  end
+
+  def subscribed_to_judge_requests
+    require "active_support/notifications"
+    payloads = []
+    subscription = ActiveSupport::Notifications.subscribe("request.judge") { |*args| payloads << args.last }
+    yield
+    payloads
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
+  def test_a_request_emits_an_instrumentation_event
+    server = ok_server
+    payloads = subscribed_to_judge_requests do
+      client_for(server).call(state: "My invoice is wrong again!", questions: questions)
+    end
+
+    assert_equal 1, payloads.size
+    event = payloads.first
+
+    assert_equal 3, event[:questions]
+    assert_equal "jev-latest", event[:model]
+    assert_operator event[:request_bytes], :>, 0
+    assert_equal 430, event[:input_tokens]
+    assert_equal 73, event[:output_tokens]
+    assert_operator event[:latency], :>=, 0
+  end
+
+  def test_the_event_carries_no_state_and_no_key
+    server = ok_server
+    payloads = subscribed_to_judge_requests do
+      client_for(server).call(state: "My invoice is wrong again!", questions: questions)
+    end
+
+    serialised = payloads.first.inspect
+
+    refute_includes serialised, "invoice is wrong"
+    refute_includes serialised, "test-key"
+    assert_equal %i[model questions request_bytes latency input_tokens output_tokens],
+                 payloads.first.keys
+  end
+
+  def test_a_failing_request_still_emits_one_event
+    server = serve { |_req, _i| [401, {}, Canned.response_json] }
+    payloads = subscribed_to_judge_requests do
+      assert_raises(Judge::AuthenticationError) do
+        client_for(server).call(state: "anything", questions: questions)
+      end
+    end
+
+    assert_equal 1, payloads.size
+  end
+
+  def test_a_retry_emits_a_single_event_for_the_whole_call
+    attempts = 0
+    server = serve do |_req, _i|
+      attempts += 1
+      attempts == 1 ? [500, {}, Canned.response_json] : [200, {}, LIVE_RESPONSE]
+    end
+
+    payloads = subscribed_to_judge_requests do
+      client_for(server).call(state: "anything", questions: questions)
+    end
+
+    assert_equal 2, attempts
+    assert_equal 1, payloads.size, "the event spans the call, not each HTTP attempt"
+  end
+
+  def test_retry_after_beyond_max_retry_wait_raises_without_sleeping
+    server = serve { |_req, _i| [429, { "Retry-After" => "120" }, "{}"] }
+
+    error = assert_raises(Judge::RateLimitError) do
+      client_for(server, max_retry_wait: 10.0).call(state: "hi", questions: questions)
+    end
+
+    assert_in_delta 120.0, error.retry_after
+    assert_equal 1, server.requests.size
+    assert_empty @slept
+  end
+
+  def test_tls_handshake_failure_is_a_transport_error
+    plain = TCPServer.new("127.0.0.1", 0)
+    responder = Thread.new do
+      socket = plain.accept
+      socket.write("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+      socket.close
+    end
+    https = "https://127.0.0.1:#{plain.addr[1]}/v1/systemone"
+    config = config_for(ok_server, base_url: https, max_retries: 0)
+
+    error = assert_raises(Judge::TransportError) do
+      Judge::Client.new(config: config).call(state: "hi", questions: questions)
+    end
+
+    assert_includes error.message, "OpenSSL::SSL::SSLError"
+  ensure
+    responder&.kill
+    plain&.close
   end
 end

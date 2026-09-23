@@ -2,42 +2,42 @@
 
 require "rails_helper"
 
-class JevJobsTest < JevRailsTest
+class JudgeJobsTest < JudgeRailsTest
   def setup
     super
     @enqueued = []
-    Jev::Rails::Jobs.enqueuer = ->(payload) { @enqueued << payload }
+    Judge::Rails::Jobs.enqueuer = ->(payload) { @enqueued << payload }
   end
 
   def teardown
-    Jev::Rails::Jobs.reset_enqueuer!
+    Judge::Rails::Jobs.reset_enqueuer!
     super
   end
 
   attr_reader :enqueued
 
   def exploding_client(on: nil)
-    JevTestSupport::RecordingClient.new do |_question, _name, state|
-      raise Jev::APIError, "boom" if on.nil? || state.to_s.include?(on)
+    JudgeTestSupport::RecordingClient.new do |_question, _name, state|
+      raise Judge::APIError, "boom" if on.nil? || state.to_s.include?(on)
 
       nil
     end
   end
 
-  def run_payload(payload, client: nil)
-    Jev::Rails::Jobs.perform(payload, client: client)
+  def run_payload(payload, adapter: nil)
+    Judge::Rails::Jobs.perform(payload, adapter: adapter)
   end
 
   def test_inline_computes_during_save
     klass = model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call, sync: true
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, sync: true
     end
 
     record = klass.create!(body: "server is down")
 
     assert_in_delta 0.91, record.reload.urgency
-    assert_equal 1, client.call_count
+    assert_equal 1, adapter.call_count
     assert_empty enqueued
   end
 
@@ -48,10 +48,9 @@ class JevJobsTest < JevRailsTest
     assert_equal 1, enqueued.size
     payload = enqueued.first
 
-    assert_equal :record, payload.kind
     assert_equal [record.id], payload.ids
     assert_equal %i[urgency], payload.names
-    assert_equal 0, client.call_count
+    assert_equal 0, adapter.call_count
   end
 
   def test_noop_save_enqueues_nothing
@@ -67,8 +66,8 @@ class JevJobsTest < JevRailsTest
 
   def test_callbacks_false_never_enqueues
     klass = model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call, callbacks: false
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, callbacks: false
     end
 
     record = klass.create!(body: "cannot log in")
@@ -78,48 +77,26 @@ class JevJobsTest < JevRailsTest
     assert_nil record.reload.urgency
   end
 
-  def test_queue_mode_batches_ids
-    klass = model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call, callbacks: :queue
-    end
-
-    ids = nil
-    Jev::Rails::Jobs.batch do
-      ids = 3.times.map { |i| klass.create!(body: "ticket #{i}").id }
-
-      assert_empty enqueued
-    end
-
-    assert_equal 1, enqueued.size
-    assert_equal :bulk, enqueued.first.kind
-    assert_equal ids.sort, enqueued.first.ids.sort
-
-    run_payload(enqueued.first)
-
-    assert_equal 3, klass.where.not(urgency: nil).count
-  end
-
   def test_backfill_shares_one_call_across_attributes
     klass = backfill_model
     250.times { |i| klass.create!(body: "ticket #{i}") }
-    client.reset!
+    adapter.reset!
 
-    summary = klass.jev_refresh_all
+    summary = klass.judge_refresh_all
 
     assert_equal 250, summary.records
     assert_equal 250, summary.computed
     assert_equal 250, summary.calls
-    assert_equal 250, client.call_count
+    assert_equal 250, adapter.call_count
     assert_equal 250, klass.where.not(urgency: nil).where.not(intent: nil).count
   end
 
   def test_backfill_counts_failures_and_continues
     klass = backfill_model
     %w[fine boom-here also-fine].each { |body| klass.create!(body: body) }
-    Jev.client = exploding_client(on: "boom")
+    Judge.adapter = exploding_client(on: "boom")
 
-    summary = klass.jev_refresh_all
+    summary = klass.judge_refresh_all
 
     assert_equal 3, summary.records
     assert_equal 2, summary.computed
@@ -130,15 +107,15 @@ class JevJobsTest < JevRailsTest
   def test_resume_skips_computed_records
     klass = backfill_model
     3.times { |i| klass.create!(body: "ticket #{i}") }
-    klass.jev_refresh_all
-    client.reset!
+    klass.judge_refresh_all
+    adapter.reset!
 
-    summary = klass.jev_refresh_all(force: true, resume: true)
+    summary = klass.judge_refresh_all(force: true, resume: true)
 
     assert_equal 3, summary.skipped
     assert_equal 0, summary.computed
     assert_equal 0, summary.calls
-    assert_equal 0, client.call_count
+    assert_equal 0, adapter.call_count
   end
 
   def test_failed_compute_keeps_previous_value_and_does_not_raise
@@ -150,7 +127,7 @@ class JevJobsTest < JevRailsTest
 
     assert_in_delta 0.91, record.urgency
 
-    Jev.client = exploding_client
+    Judge.adapter = exploding_client
     record.update!(body: "something else entirely")
 
     assert_equal 1, enqueued.size
@@ -159,25 +136,25 @@ class JevJobsTest < JevRailsTest
     record.reload
 
     assert_in_delta 0.91, record.urgency
-    assert_predicate record, :jev_stale?
+    assert_predicate record, :judge_stale?
   end
 
   def test_inline_on_error_raise_propagates
     klass = model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call, sync: true, on_error: :raise
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, sync: true, on_error: :raise
     end
-    Jev.client = exploding_client
+    Judge.adapter = exploding_client
 
-    assert_raises(Jev::APIError) { klass.create!(body: "server is down") }
+    assert_raises(Judge::APIError) { klass.create!(body: "server is down") }
   end
 
   def test_inline_on_error_pass_swallows
     klass = model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call, sync: true
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, sync: true
     end
-    Jev.client = exploding_client
+    Judge.adapter = exploding_client
 
     record = klass.create!(body: "server is down")
 
@@ -186,12 +163,12 @@ class JevJobsTest < JevRailsTest
 
   def test_refresh_later_enqueues_manually
     klass = model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call, callbacks: false
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, callbacks: false
     end
     record = klass.create!(body: "cannot log in")
 
-    record.jev_refresh_later
+    record.judge_refresh_later
 
     assert_equal 1, enqueued.size
     run_payload(enqueued.first)
@@ -199,21 +176,101 @@ class JevJobsTest < JevRailsTest
     assert_in_delta 0.91, record.reload.urgency
   end
 
+  def test_refresh_job_hands_a_retryable_failure_back_to_active_job
+    record = named_async_model.create!(body: "cannot log in")
+    Judge.adapter = JudgeTestSupport::RecordingClient.new { raise Judge::ServerError, "503" }
+    ActiveJob::Base.queue_adapter.enqueued_jobs.clear
+
+    Judge::Rails::RefreshJob.perform_now(record.class.name, record.id, ["urgency"])
+
+    assert_equal 1, ActiveJob::Base.queue_adapter.enqueued_jobs.size
+  end
+
+  def test_refresh_job_swallows_a_failure_that_retrying_cannot_fix
+    record = named_async_model.create!(body: "cannot log in")
+    Judge.adapter = exploding_client
+    ActiveJob::Base.queue_adapter.enqueued_jobs.clear
+
+    Judge::Rails::RefreshJob.perform_now(record.class.name, record.id, ["urgency"])
+
+    assert_empty ActiveJob::Base.queue_adapter.enqueued_jobs
+  end
+
+  def test_a_source_that_changes_on_save_does_not_loop
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: -> { "#{body} #{updated_at.to_f}" }
+    end
+    record = klass.create!(body: "down")
+    run_payload(enqueued.shift)
+
+    assert_empty enqueued
+    assert_equal 1, adapter.call_count
+    assert_predicate record.reload, :judge_stale?
+  end
+
+  def test_refreshing_one_attribute_still_enqueues_another_that_went_stale
+    klass = model do
+      judge_source :body
+      judge_attribute :urgency, Judge.noul("urgent?")
+      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call
+    end
+    record = klass.create!(body: "down")
+    enqueued.clear
+
+    record.body = "up again"
+    record.judge_refresh!(:urgency)
+
+    assert_equal [%i[intent]], enqueued.map(&:names)
+  end
+
+  def test_blanking_the_source_of_an_async_attribute_clears_it_without_a_job
+    record = async_model.create!(body: "down")
+    run_payload(enqueued.shift)
+    record.reload.update!(body: "")
+    record.update!(channel: "web")
+
+    assert_empty enqueued
+    assert_nil record.reload.urgency
+    assert_equal 1, adapter.call_count
+  end
+
+  def test_refresh_bang_computes_sync_attributes_with_the_given_adapter
+    klass = model do
+      judge_source :body
+      judge_attribute :urgency, Judge.noul("urgent?"), sync: true
+      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call, callbacks: false
+    end
+    record = klass.create!(body: "down")
+    record.update_columns(body: "up again")
+    per_request = JudgeTestSupport::RecordingClient.new
+    adapter.reset!
+
+    record.judge_refresh!(:intent, adapter: per_request)
+
+    assert_equal 0, adapter.call_count
+    assert_equal 2, per_request.call_count
+  end
+
   private
+
+  def named_async_model
+    self.class.send(:remove_const, :NamedTicket) if self.class.const_defined?(:NamedTicket, false)
+    self.class.const_set(:NamedTicket, async_model)
+  end
 
   def async_model
     model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call
     end
   end
 
   def backfill_model
     model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call, callbacks: false
-      jev_attribute :intent, JevTestSupport::QUESTIONS[:intent].call, callbacks: false
-      jev_attribute :frustration, JevTestSupport::QUESTIONS[:frustration].call, callbacks: false
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, callbacks: false
+      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call, callbacks: false
+      judge_attribute :frustration, JudgeTestSupport::QUESTIONS[:frustration].call, callbacks: false
     end
   end
 end

@@ -2,14 +2,14 @@
 
 require "rails_helper"
 
-class JevScopesTest < JevRailsTest
+class JudgeScopesTest < JudgeRailsTest
   def setup
     super
     @klass = model do
-      jev_source :body
-      jev_attribute :urgency, JevTestSupport::QUESTIONS[:urgency].call
-      jev_attribute :intent, JevTestSupport::QUESTIONS[:intent].call
-      jev_attribute :frustration, JevTestSupport::QUESTIONS[:frustration].call
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call
+      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call
+      judge_attribute :frustration, JudgeTestSupport::QUESTIONS[:frustration].call
     end
   end
 
@@ -47,7 +47,7 @@ class JevScopesTest < JevRailsTest
     assert_equal ["blank"], subjects(klass.urgency_unknown)
   end
 
-  def test_noul_scopes_partition_exactly_like_jev_decide
+  def test_noul_scopes_partition_exactly_like_judge_decide
     ticket("on-upper", urgency: 0.8)
     ticket("on-lower", urgency: 0.2)
     ticket("middle", urgency: 0.5)
@@ -57,7 +57,7 @@ class JevScopesTest < JevRailsTest
     assert_equal ["middle"], subjects(klass.urgency_between(0.2, 0.8))
 
     klass.where.not(urgency: nil).find_each do |record|
-      band = record.jev_decide(:urgency, above: 0.8, below: 0.2)
+      band = record.judge_decide(:urgency, above: 0.8, below: 0.2)
       scope = { yes: klass.urgency_above(0.8), no: klass.urgency_below(0.2),
                 unsure: klass.urgency_between(0.2, 0.8) }.fetch(band)
 
@@ -120,8 +120,8 @@ class JevScopesTest < JevRailsTest
     ticket("partial", urgency: 0.9)
     ticket("blank")
 
-    assert_equal ["full"], subjects(klass.jev_computed)
-    assert_equal %w[blank partial], subjects(klass.jev_uncomputed)
+    assert_equal ["full"], subjects(klass.judge_computed)
+    assert_equal %w[blank partial], subjects(klass.judge_uncomputed)
   end
 
   def test_scopes_compose_into_one_query
@@ -152,62 +152,100 @@ class JevScopesTest < JevRailsTest
 
   def test_undeclared_scopes_still_raise
     assert_raises(NoMethodError) { klass.urgency_sideways(1) }
-    assert_raises(NoMethodError) { model.jev_computed }
+    assert_raises(NoMethodError) { model.judge_computed }
   end
 
-  def test_jev_filter_returns_matching_records
+  def test_judge_filter_returns_matching_records
     refund_client!
     ticket("refund", body: "please send a refund")
     ticket("thanks", body: "just saying thanks")
 
-    matched = klass.jev_filter("mentions a refund", limit: 10)
+    matched = klass.judge_filter("mentions a refund", limit: 10)
 
     assert_equal ["refund"], matched.map(&:subject)
-    assert_equal 2, client.call_count
+    assert_equal 2, adapter.call_count
   end
 
-  def test_jev_filter_honours_threshold
+  def test_judge_filter_fans_out_over_threads_and_keeps_every_record
+    refund_client!
+    40.times { |i| ticket("refund #{i}", body: "please send a refund #{i}") }
+
+    matched = klass.judge_filter("mentions a refund", limit: 40)
+
+    assert_equal 40, matched.size
+    assert_equal 40, adapter.call_count
+    assert_equal 40, matched.map(&:id).uniq.size
+  end
+
+  def test_judge_filter_sends_one_subject_per_request
+    refund_client!
+    3.times { |i| ticket("refund #{i}", body: "body #{i}") }
+
+    klass.judge_filter("mentions a refund", limit: 3)
+
+    assert_equal 3, adapter.calls.size
+    adapter.calls.each { |call| assert_equal 1, call[:questions].size }
+    assert_equal ["body 0", "body 1", "body 2"].sort,
+                 adapter.calls.map { |call| call[:state] }.sort
+  end
+
+  def test_judge_filter_runs_inline_when_concurrency_is_one
+    refund_client!
+    2.times { |i| ticket("refund #{i}", body: "refund #{i}") }
+
+    assert_equal 2, klass.judge_filter("mentions a refund", limit: 2, concurrency: 1).size
+  end
+
+  def test_judge_sort_keeps_its_order_through_the_pool
+    install_client { |_q, _name, state| noul_answer(state.include?("high") ? 0.9 : 0.1) }
+    ticket("low", body: "low")
+    ticket("high", body: "high")
+
+    assert_equal %w[high low], klass.judge_sort("is it urgent", limit: 2).map(&:subject)
+  end
+
+  def test_judge_filter_honours_threshold
     refund_client!
     ticket("refund", body: "please send a refund")
 
-    assert_equal 1, klass.jev_filter("mentions a refund", limit: 10).size
-    assert_empty klass.jev_filter("mentions a refund", limit: 10, threshold: 0.95)
+    assert_equal 1, klass.judge_filter("mentions a refund", limit: 10).size
+    assert_empty klass.judge_filter("mentions a refund", limit: 10, threshold: 0.95)
   end
 
-  def test_jev_filter_respects_relation_scoping
+  def test_judge_filter_respects_relation_scoping
     refund_client!
     ticket("chat", channel: "chat", body: "chat refund please")
     ticket("mail", channel: "email", body: "mail refund please")
 
-    matched = klass.where(channel: "chat").jev_filter("mentions a refund", limit: 10)
+    matched = klass.where(channel: "chat").judge_filter("mentions a refund", limit: 10)
 
     assert_equal ["chat"], matched.map(&:subject)
-    assert_equal(["chat refund please"], client.calls.map { |c| c[:state] })
+    assert_equal(["chat refund please"], adapter.calls.map { |c| c[:state] })
   end
 
-  def test_jev_filter_enforces_the_limit
+  def test_judge_filter_enforces_the_limit
     refund_client!
     5.times { |i| ticket("t#{i}", body: "refund #{i}") }
 
-    matched = klass.jev_filter("mentions a refund", limit: 2)
+    matched = klass.judge_filter("mentions a refund", limit: 2)
 
-    assert_equal 2, client.call_count
+    assert_equal 2, adapter.call_count
     assert_equal 2, matched.size
   end
 
   def test_ad_hoc_helpers_require_a_limit
-    %i[jev_filter jev_map jev_sort].each do |name|
+    %i[judge_filter judge_map judge_sort].each do |name|
       error = assert_raises(ArgumentError) { klass.public_send(name, "is this urgent?") }
       assert_match(/limit:/, error.message)
       assert_match(/API call per row/, error.message)
     end
-    assert_raises(ArgumentError) { klass.jev_filter("x", limit: 0) }
-    assert_equal 0, client.call_count
+    assert_raises(ArgumentError) { klass.judge_filter("x", limit: 0) }
+    assert_equal 0, adapter.call_count
   end
 
   def test_ad_hoc_helpers_need_a_source
     plain = model
-    error = assert_raises(ArgumentError) { plain.jev_map("is this urgent?", limit: 5) }
+    error = assert_raises(ArgumentError) { plain.judge_map("is this urgent?", limit: 5) }
     assert_match(/source:/, error.message)
   end
 
@@ -215,27 +253,27 @@ class JevScopesTest < JevRailsTest
     plain = model
     plain.create!(subject: "a", body: "b")
 
-    plain.jev_map("is this urgent?", limit: 5, source: ->(record) { "#{record.subject}!" })
+    plain.judge_map("is this urgent?", limit: 5, source: ->(record) { "#{record.subject}!" })
 
-    assert_equal(["a!"], client.calls.map { |c| c[:state] })
+    assert_equal(["a!"], adapter.calls.map { |c| c[:state] })
   end
 
-  def test_jev_map_returns_results_keyed_by_record
+  def test_judge_map_returns_results_keyed_by_record
     record = ticket("one")
 
-    mapped = klass.jev_map("is this urgent?", limit: 5)
+    mapped = klass.judge_map("is this urgent?", limit: 5)
 
     assert_equal [record], mapped.keys
-    assert_kind_of Jev::Result, mapped[record]
+    assert_kind_of Judge::Result, mapped[record]
     assert_in_delta 0.91, mapped[record].value
   end
 
   def test_a_string_question_is_coerced_to_a_noul
     ticket("one")
 
-    klass.jev_map("is this urgent?", limit: 5)
+    klass.judge_map("is this urgent?", limit: 5)
 
-    question = client.calls.first[:questions].values.first
+    question = adapter.calls.first[:questions].values.first
     assert_equal "noul", question.type
     assert_equal "is this urgent?", question.instructions
   end
@@ -243,19 +281,54 @@ class JevScopesTest < JevRailsTest
   def test_a_question_object_is_used_as_is
     ticket("one")
 
-    klass.jev_map(Jev.choice("what is this?", %w[billing technical sales]), limit: 5)
+    klass.judge_map(Judge.choice("what is this?", %w[billing technical sales]), limit: 5)
 
-    assert_equal "choice", client.calls.first[:questions].values.first.type
+    assert_equal "choice", adapter.calls.first[:questions].values.first.type
   end
 
-  def test_jev_sort_orders_by_judgement
+  def test_judge_sort_orders_by_judgement
     scoring_client!
     ticket("low", body: "score 1")
     ticket("high", body: "score 9")
     ticket("mid", body: "score 5")
 
-    assert_equal %w[high mid low], klass.jev_sort("churn risk?", limit: 10).map(&:subject)
-    assert_equal %w[low mid high], klass.jev_sort("churn risk?", limit: 10, dir: :asc).map(&:subject)
+    assert_equal %w[high mid low], klass.judge_sort("churn risk?", limit: 10).map(&:subject)
+    assert_equal %w[low mid high], klass.judge_sort("churn risk?", limit: 10, dir: :asc).map(&:subject)
+  end
+
+  def test_an_integer_names_the_level_when_levels_are_numeric
+    numeric = model do
+      judge_source :body
+      judge_attribute :frustration, Judge.score("How severe?", 1..5)
+    end
+    numeric.create!(subject: "three", body: "b", frustration: 2.0)
+    numeric.create!(subject: "four", body: "b", frustration: 3.0)
+    numeric.create!(subject: "five", body: "b", frustration: 4.0)
+
+    assert_equal %w[five four], subjects(numeric.frustration_at_least(4))
+    assert_equal %w[four three], subjects(numeric.frustration_at_most(4))
+    assert_equal ["four"], subjects(numeric.frustration_level(4))
+    assert_raises(ArgumentError) { numeric.frustration_at_least(0) }
+  end
+
+  def test_judge_filter_never_raises_a_limit_the_relation_already_set
+    refund_client!
+    5.times { |i| ticket("t#{i}", body: "refund #{i}") }
+
+    klass.limit(2).judge_filter("mentions a refund", limit: 25)
+
+    assert_equal 2, adapter.call_count
+  end
+
+  def test_judge_filter_skips_records_with_blank_text
+    refund_client!
+    ticket("empty", body: "")
+    ticket("full", body: "refund please")
+
+    matched = klass.judge_filter("mentions a refund", limit: 10, source: :body)
+
+    assert_equal ["full"], matched.map(&:subject)
+    assert_equal(["refund please"], adapter.calls.map { |c| c[:state] })
   end
 
   private
@@ -269,8 +342,8 @@ class JevScopesTest < JevRailsTest
   end
 
   def install_client(&)
-    @client = JevTestSupport::RecordingClient.new(&)
-    Jev.client = @client
+    @adapter = JudgeTestSupport::RecordingClient.new(&)
+    Judge.adapter = @adapter
   end
 
   def noul_answer(value)

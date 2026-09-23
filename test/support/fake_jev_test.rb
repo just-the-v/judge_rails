@@ -65,7 +65,7 @@ class FakeJevTest < Minitest::Test
 
   def test_synthesised_answers_are_coercible_into_results
     body = JSON.parse(post.body)
-    results = Jev::ResultSet.from_response(body, questions: Canned.questions)
+    results = Judge::ResultSet.from_response(body, questions: Canned.questions)
 
     assert_equal 3, results.size
     assert_kind_of Float, results[:urgent].value

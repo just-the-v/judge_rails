@@ -17,14 +17,14 @@ class ResultTest < Minitest::Test
 
   def questions
     {
-      is_urgent: Jev.noul("Does this convey urgency?"),
-      department: Jev.choice("Which team should handle this?", %w[billing technical sales]),
-      frustration: Jev.score("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"])
+      is_urgent: Judge.noul("Does this convey urgency?"),
+      department: Judge.choice("Which team should handle this?", %w[billing technical sales]),
+      frustration: Judge.score("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"])
     }
   end
 
   def set
-    @set ||= Jev::ResultSet.from_response(LIVE_RESPONSE, questions: questions, latency: 0.69)
+    @set ||= Judge::ResultSet.from_response(LIVE_RESPONSE, questions: questions, latency: 0.69)
   end
 
   def test_noul_value_is_the_probability
@@ -61,7 +61,7 @@ class ResultTest < Minitest::Test
   end
 
   def test_true_bang_rejects_non_noul_answers
-    assert_raises(Jev::InvalidResponseError) { set[:department].true? }
+    assert_raises(Judge::InvalidResponseError) { set[:department].true? }
   end
 
   def test_result_set_metadata
@@ -75,13 +75,13 @@ class ResultTest < Minitest::Test
   def test_missing_answer_raises
     body = { "answers" => { "is_urgent" => { "type" => "noul", "noul" => 0.5 } } }
 
-    assert_raises(Jev::InvalidResponseError) { Jev::ResultSet.from_response(body, questions: questions) }
+    assert_raises(Judge::InvalidResponseError) { Judge::ResultSet.from_response(body, questions: questions) }
   end
 
   def test_malformed_answer_raises
     body = { "answers" => { "is_urgent" => { "type" => "noul" } } }
     qs = { is_urgent: questions[:is_urgent] }
 
-    assert_raises(Jev::InvalidResponseError) { Jev::ResultSet.from_response(body, questions: qs)[:is_urgent].value }
+    assert_raises(Judge::InvalidResponseError) { Judge::ResultSet.from_response(body, questions: qs)[:is_urgent].value }
   end
 end

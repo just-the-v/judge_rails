@@ -78,11 +78,11 @@ module Canned
 
   def questions
     {
-      urgent: Jev.noul("Is this message urgent?",
-                       { "true" => "needs a reply today", "false" => "can wait" }, name: :urgent),
-      topic: Jev.choice("Which team should handle this?",
-                        REQUEST.dig("questions", "topic", "criteria"), name: :topic),
-      anger: Jev.score("How angry is the customer?", ["Calm", "Frustrated", "Very angry"], name: :anger)
+      urgent: Judge.noul("Is this message urgent?",
+                         { "true" => "needs a reply today", "false" => "can wait" }, name: :urgent),
+      topic: Judge.choice("Which team should handle this?",
+                          REQUEST.dig("questions", "topic", "criteria"), name: :topic),
+      anger: Judge.score("How angry is the customer?", ["Calm", "Frustrated", "Very angry"], name: :anger)
     }
   end
 

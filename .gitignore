@@ -4,3 +4,4 @@
 Gemfile.lock
 .env
 gemfiles/*.gemfile.lock
+*.gem

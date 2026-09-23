@@ -1,28 +1,107 @@
 # Changelog
 
+## 0.0.1
+
+First public version, and the first under this name. Published at 0.0.1 rather than 1.0.0 on purpose: the surface is expected to
+move, and nothing here has a second user yet.
+
+### Added
+
+- **An adapter seam.** Everything now goes through one method, `call(state:, questions:, model:)
+  -> Judge::ResultSet`. An adapter builds its answers with `Judge::Result.from_values`, which takes
+  typed values, so no adapter reads or writes a wire format. `Judge::Adapter.register(:name) { ... }`
+  adds one, `Judge.config.adapter` or `JUDGE_ADAPTER` picks it, and `adapter:` overrides it per call.
+  The default stays `:jev`.
+- `Judge::Result.from_values`, the typed entry point an adapter answers with.
+- `Judge::Pool`, a standard-library thread pool. `judge_filter`, `judge_map` and `judge_sort` fan out across
+  records through it, default 8, set with `concurrency:` or `Judge.config.concurrency`. Measured
+  against the live API: 6.9x at 8 threads, 18.4x at 32, with the request unchanged and no judgment
+  traded for the speed.
+- `request.judge` instrumentation through `ActiveSupport::Notifications` when it is loaded. Carries
+  model, question count, request size, latency and token counts. Never the state, never the key.
+- `ADVANCED.md` for `sync: true`, `on_error`, `if_condition`, `callbacks: false`, backfill and the
+  injectable enqueuer, so the README keeps one path.
+- `activerecord` and `activesupport` declared as runtime dependencies. They were required by
+  `judge/rails` and declared nowhere, so bundler could not resolve them.
+
+### Removed
+
+- `callbacks: :queue` and `Judge::Rails::Jobs.batch`. They coalesced job dispatch, never requests: one
+  demonstrated caller in the whole workspace, and it was a test. `judge_refresh_all` covers the same
+  ground with no setup.
+- `Judge::Rails::BulkRefreshJob` and the `kind` field on the job payload, which only that mode reached.
+- `config.batch_rows`, which nothing read.
+
+### Changed
+
+- **Renamed from `jev-in-rails` to `judge_rails`**, before publishing rather than after. The macro
+  prefix is `judge_`, the module is `Judge`, the sidecar column is `<name>_judge`, the generators are
+  `judge:install` and `judge:attribute`, and the validator key is `judge:`. TypeSafe Jev keeps its
+  name everywhere it is the subject: it is the default adapter, `:jev`, and the model string is still
+  `jev-latest`. A gem named for one provider while carrying an adapter for others is the mistake
+  RubyLLM took two major versions to undo.
+- `client:` is `adapter:` everywhere, and `Judge.client` is `Judge.adapter`. One word for one concept.
+- `required_ruby_version` is `>= 3.2.0`, which is what CI actually tests. It claimed 3.1 and never
+  ran it.
+
+### Fixed
+
+- `gem "judge_rails"` now loads the gem. There was no `lib/judge_rails.rb`, so `Bundler.require` loaded
+  nothing and the generated initializer crashed on boot.
+- `judge:attribute` no longer crashes on every run. Its `create_migration` step shadowed the method
+  `migration_template` calls.
+- The generated initializer keeps a key already read from `JEV_API_KEY` or `TYPESAFE_API_KEY`.
+- `judge_filter`, `judge_map` and `judge_sort` never raise a `limit` the relation already set, and skip
+  records with blank text.
+- Judge validations remember a judgment per text on the record, so a save that leaves the text alone
+  costs nothing, and the prefetch runs after `before_validation` normalizers. A failed call is retried
+  on the next pass. A plain `ActiveModel` object can be validated.
+- TLS and protocol failures are `Judge::TransportError`, so `on_error: :pass` covers them.
+- A `Retry-After` above `config.max_retry_wait` (10 s) raises `RateLimitError` instead of sleeping.
+- `RefreshJob` hands a 429, a 5xx or a transport error back to ActiveJob, which retries it five times
+  with backoff. It used to report success and leave the record unjudged.
+- `Judge::Pool` stops starting requests when the caller is interrupted, closes each worker's
+  connection, and runs workers inside the Rails executor with the caller's log tags.
+- Blank source text clears the value and is never stale, so it no longer enqueues a job on every save.
+- A zero-argument `if_condition` lambda runs against the record instead of raising.
+- `model:` on `judge_attribute` is sent. A pin change makes old judgments stale.
+- Changing `config.adapter` after the first call takes effect.
+- `judge_refresh!(adapter:)` uses that adapter for the synchronous attributes its save computes.
+- The gem's own refresh save never enqueues another refresh, so a source that changes on every save
+  cannot loop.
+- On numeric score levels, an Integer passed to `_at_least`, `_at_most` or `_level` is the label.
+- The sidecar migration works on MySQL, which rejects a default on a JSON column.
+
+### Not added, on purpose
+
+Subject batching, packing several records into one request the way `pg_judge` does. It was built,
+measured against 250 committed judgments, and rejected: it costs 9 to 14 points of decision
+agreement at every batch size, because Jev scores each question against the whole state.
+`BENCHMARK.md` carries the protocol, which was written before the runs, and the numbers.
+
 ## Unreleased
 
 Initial release.
 
 ### Core (plain Ruby, no dependencies outside the standard library)
 
-- `Jev::Question::Noul`, `Choice` and `Score` value objects. Frozen, comparable, serialisable to the
+- `Judge::Question::Noul`, `Choice` and `Score` value objects. Frozen, comparable, serialisable to the
   wire format. Each fingerprints itself with a digest over its type, instructions and criteria.
-- `Jev::Result` and `Jev::ResultSet`: typed answers carrying value, calibrated probability, confidence,
+- `Judge::Result` and `Judge::ResultSet`: typed answers carrying value, calibrated probability, confidence,
   the full distribution, the score legend, model version, token usage and latency.
-- `Jev::Client`: `Net::HTTP` with a per-thread persistent connection, bearer auth, jittered exponential
+- `Judge::Client`: `Net::HTTP` with a per-thread persistent connection, bearer auth, jittered exponential
   backoff on 429 and 5xx, `Retry-After` support, and a full error taxonomy.
-- `Jev.ask` facade: a Question, a String, an Array or a Hash in; a `Result` or a `ResultSet` out.
+- `Judge.ask` facade: a Question, a String, an Array or a Hash in; a `Result` or a `ResultSet` out.
   Many questions travel in one request.
 
-### ActiveRecord layer (`require "jev/rails"`)
+### ActiveRecord layer (`require "judge/rails"`)
 
-- `jev_attribute` declares a judgment as an ordinary column plus a `<name>_jev` provenance sidecar.
-- `jev_source` sets the text once per model, so every attribute sharing it costs one API call per record.
+- `judge_attribute` declares a judgment as an ordinary column plus a `<name>_judge` provenance sidecar.
+- `judge_source` sets the text once per model, so every attribute sharing it costs one API call per record.
 - Automatic invalidation on either the source text or the question wording changing.
-- Compute timing: `sync: true` inline, `:async` after_commit (default), `:queue` batched, or `false`.
-- `jev_refresh_all` resumable backfill with a per-run summary.
-- Generated scopes per attribute, plus `jev_filter` / `jev_map` / `jev_sort` for undeclared questions,
+- Compute timing: `sync: true` inline, `:async` after_commit (default), or `false`.
+- `judge_refresh_all` resumable backfill with a per-run summary.
+- Generated scopes per attribute, plus `judge_filter` / `judge_map` / `judge_sort` for undeclared questions,
   with a mandatory `limit:`.
-- `validates :body, jev: { refute: "..." }` with `on_error: :pass | :fail | :raise`.
-- `jev:install` and `jev:attribute` generators, and a `jev_attribute` migration helper.
+- `validates :body, judge: { refute: "..." }` with `on_error: :pass | :fail | :raise`.
+- `judge:install` and `judge:attribute` generators, and a `judge_attribute` migration helper.
