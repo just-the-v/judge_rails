@@ -3,6 +3,8 @@
 module Judge
   class Question
     class Score < Question
+      TYPE = "score"
+
       def levels
         criteria
       end
@@ -20,8 +22,14 @@ module Judge
                 "score criteria must be an array or range of ordered levels"
         end
         raise ArgumentError, "score needs at least two levels" if levels.size < 2
+        unless levels.all? { |level| level.is_a?(String) || level.is_a?(Symbol) || level.is_a?(Numeric) }
+          raise ArgumentError, "score levels must be strings, symbols or numbers"
+        end
 
-        levels.map(&:to_s)
+        labels = levels.map { |level| level.to_s.dup.freeze }
+        raise ArgumentError, "score levels must be distinct" if labels.uniq.size != labels.size
+
+        labels.freeze
       end
     end
   end

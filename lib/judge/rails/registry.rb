@@ -8,10 +8,17 @@ module Judge
       def initialize(parent = nil)
         @parent = parent
         @own = {}
+        @version = 0
       end
 
       def add(definition)
         @own[definition.name] = definition
+        @version += 1
+        definition
+      end
+
+      def version
+        @version + (@parent ? @parent.version : 0)
       end
 
       def [](name)
@@ -23,7 +30,11 @@ module Judge
       end
 
       def to_h
-        (@parent ? @parent.to_h : {}).merge(@own)
+        current = version
+        return @flattened if @flattened_version == current
+
+        @flattened_version = current
+        @flattened = (@parent ? @parent.to_h : {}).merge(@own).freeze
       end
 
       def each(&)

@@ -205,22 +205,32 @@ class JudgeJobsTest < JudgeRailsTest
 
     assert_empty enqueued
     assert_equal 1, adapter.call_count
-    assert_predicate record.reload, :judge_stale?
+    refute_predicate record.reload, :judge_stale?
   end
 
-  def test_refreshing_one_attribute_still_enqueues_another_that_went_stale
-    klass = model do
-      judge_source :body
-      judge_attribute :urgency, Judge.noul("urgent?")
-      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call
-    end
-    record = klass.create!(body: "down")
+  def test_a_refresh_stores_judgments_without_saving_other_edits
+    record = async_model.create!(body: "down", channel: "email")
     enqueued.clear
 
-    record.body = "up again"
+    record.channel = "web"
     record.judge_refresh!(:urgency)
 
-    assert_equal [%i[intent]], enqueued.map(&:names)
+    assert_in_delta 0.91, record.class.find(record.id).urgency
+    assert_equal "email", record.class.find(record.id).channel
+    assert_empty enqueued
+  end
+
+  def test_after_judge_refresh_runs_once_per_stored_refresh
+    seen = []
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :body, callbacks: false
+      after_judge_refresh { seen << urgency }
+    end
+    record = klass.create!(body: "down")
+    record.judge_refresh!
+    record.judge_refresh!
+
+    assert_equal [0.91], seen
   end
 
   def test_blanking_the_source_of_an_async_attribute_clears_it_without_a_job
@@ -234,7 +244,7 @@ class JudgeJobsTest < JudgeRailsTest
     assert_equal 1, adapter.call_count
   end
 
-  def test_refresh_bang_computes_sync_attributes_with_the_given_adapter
+  def test_refresh_bang_bills_only_the_adapter_it_was_given
     klass = model do
       judge_source :body
       judge_attribute :urgency, Judge.noul("urgent?"), sync: true
@@ -245,10 +255,101 @@ class JudgeJobsTest < JudgeRailsTest
     per_request = JudgeTestSupport::RecordingClient.new
     adapter.reset!
 
-    record.judge_refresh!(:intent, adapter: per_request)
+    record.judge_refresh!(adapter: per_request)
 
     assert_equal 0, adapter.call_count
-    assert_equal 2, per_request.call_count
+    assert_equal 1, per_request.call_count
+  end
+
+  def test_a_refresh_inside_a_transaction_does_not_hide_a_later_edit
+    record = async_model.create!(body: "down")
+    run_payload(enqueued.shift)
+
+    record.class.transaction do
+      record.judge_refresh!(:urgency, force: true)
+      record.update!(body: "new text")
+    end
+
+    assert_equal [%i[urgency]], enqueued.map(&:names)
+  end
+
+  def test_a_refresh_stores_the_judgment_on_a_row_that_fails_validation
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :body, callbacks: false
+      validates :channel, presence: true
+    end
+    record = klass.new(body: "down").tap { |ticket| ticket.save!(validate: false) }
+
+    record.judge_refresh!
+
+    assert_in_delta 0.91, klass.find(record.id).urgency
+    assert_equal 1, adapter.call_count
+  end
+
+  def test_a_refresh_does_not_rerun_judge_validations
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :body
+      validates :body, judge: { refute: "is spam" }
+    end
+    Judge.adapter = @adapter = JudgeTestSupport::RecordingClient.new do |question, name, _state|
+      { "type" => "noul", "noul" => 0.1, "name" => name.to_s } if question.instructions == "is spam"
+    end
+    record = klass.create!(body: "down")
+    adapter.reset!
+
+    run_payload(enqueued.shift)
+
+    assert_equal 1, adapter.call_count
+    refute_nil record.reload.urgency
+  end
+
+  def test_a_second_async_save_in_one_transaction_is_still_enqueued
+    klass = model do
+      judge_source :body
+      judge_attribute :urgency, Judge.noul("urgent?")
+      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call
+    end
+    record = klass.create!(body: "down")
+    enqueued.clear
+
+    klass.transaction do
+      record.update!(body: "site down")
+      record.judge_refresh!(:urgency)
+    end
+
+    assert_equal [%i[intent]], enqueued.map(&:names)
+  end
+
+  def test_backfill_counts_a_call_that_was_sent_before_a_failure
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :subject, callbacks: false
+      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call, source: :body, callbacks: false
+    end
+    klass.create!(subject: "subject", body: "body")
+    Judge.adapter = JudgeTestSupport::RecordingClient.new do |_question, _name, state|
+      raise Judge::ServerError, "503" if state == "body"
+    end
+
+    summary = klass.judge_refresh_all
+
+    assert_equal 1, summary.failed
+    assert_equal 2, summary.calls
+  end
+
+  def test_refresh_job_honours_the_queue_name_prefix
+    ActiveJob::Base.queue_name_prefix = "myapp"
+
+    assert_equal "myapp_default", Judge::Rails::RefreshJob.new("X", 1, []).queue_name
+  ensure
+    ActiveJob::Base.queue_name_prefix = nil
+  end
+
+  def test_a_database_deadlock_is_retried_by_active_job
+    assert_includes Judge::Rails::Jobs::RETRYABLE_ERRORS, ActiveRecord::Deadlocked
+  end
+
+  def test_the_enqueuer_refuses_something_that_cannot_be_called
+    assert_raises(ArgumentError) { Judge::Rails::Jobs.enqueuer = nil }
   end
 
   private

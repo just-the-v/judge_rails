@@ -61,7 +61,7 @@ class ResultTest < Minitest::Test
   end
 
   def test_true_bang_rejects_non_noul_answers
-    assert_raises(Judge::InvalidResponseError) { set[:department].true? }
+    assert_raises(ArgumentError) { set[:department].true? }
   end
 
   def test_result_set_metadata
@@ -83,5 +83,41 @@ class ResultTest < Minitest::Test
     qs = { is_urgent: questions[:is_urgent] }
 
     assert_raises(Judge::InvalidResponseError) { Judge::ResultSet.from_response(body, questions: qs)[:is_urgent].value }
+  end
+
+  def test_malformed_answers_fail_inside_ask
+    noul = Judge.noul("urgent?")
+    choice = Judge.choice("team?", %w[billing technical])
+    score = Judge.score("how?", %w[calm cross angry])
+    [
+      [noul, { "type" => "noul" }],
+      [noul, { "type" => "noul", "noul" => "high" }],
+      [noul, { "type" => "choice", "choice" => "billing" }],
+      [choice, { "type" => "choice", "choice" => "sales" }],
+      [score, { "type" => "score", "score" => 7 }]
+    ].each do |question, answer|
+      assert_raises(Judge::InvalidResponseError, answer.inspect) { question.coerce(answer, name: :x) }
+    end
+  end
+
+  def test_from_values_accepts_symbol_keys
+    question = Judge.choice("team?", %w[billing technical])
+    result = Judge::Result.from_values(name: :team, type: :choice, value: "billing", question: question,
+                                       probabilities: { billing: 0.8, technical: 0.2 })
+
+    assert_in_delta 0.8, result.probability
+  end
+
+  def test_a_result_set_refuses_two_results_with_one_name
+    one = Judge::Result.from_values(name: :a, type: :noul, value: 0.1)
+
+    assert_raises(ArgumentError) { Judge::ResultSet.new([one, one]) }
+  end
+
+  def test_answers_are_deeply_frozen
+    result = set[:department]
+
+    assert_predicate result.probabilities, :frozen?
+    assert_predicate set.usage, :frozen?
   end
 end

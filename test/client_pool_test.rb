@@ -28,7 +28,7 @@ class ClientPoolTest < Minitest::Test
   end
 
   def pool
-    Thread.current[Judge::Client::CONNECTIONS_KEY] || {}
+    Thread.current[Judge::Client::CONNECTIONS_KEY]&.dig(:connections) || {}
   end
 
   def test_clients_with_different_timeouts_do_not_share_a_connection

@@ -14,10 +14,10 @@ module Judge
                      if_condition: nil, on_error: :pass)
         @name = name.to_sym
         @question = question.with_name(@name)
-        @source = source
+        @source = validate_source!(source)
         @model = model
         @callbacks = normalize_callbacks(callbacks, sync)
-        @if_condition = if_condition
+        @if_condition = validate_condition!(if_condition)
         @on_error = validate!(on_error.to_sym, ERROR_MODES, "on_error")
         validate_error_mode!
         freeze
@@ -36,9 +36,14 @@ module Judge
       end
 
       def digest
-        return @question.digest if @model.nil?
+        model = effective_model
+        return @question.digest if model == Judge::Configuration::DEFAULT_MODEL
 
-        Digest::SHA256.hexdigest("#{@question.digest}:#{@model}")[0, 16]
+        Digest::SHA256.hexdigest("#{@question.digest}:#{model}")[0, 16]
+      end
+
+      def effective_model
+        @model || Judge.config.model
       end
 
       def sync?
@@ -52,8 +57,7 @@ module Judge
       def state_for(record)
         text = case @source
                when Symbol, String then record.public_send(@source)
-               when Proc then evaluate(@source, record)
-               else raise ArgumentError, "source must be a symbol or a callable"
+               else evaluate(@source, record)
                end
         Array(text).reject { |part| part.to_s.strip.empty? }.join("\n\n")
       end
@@ -104,11 +108,32 @@ module Judge
         callable.arity.zero? ? record.instance_exec(&callable) : callable.call(record)
       end
 
+      def validate_source!(source)
+        return source if source.is_a?(Symbol) || source.is_a?(String) || source.is_a?(Proc)
+
+        raise ArgumentError, "judge_attribute #{@name.inspect} source must be a Symbol, String or Proc, " \
+                             "got #{source.class}"
+      end
+
+      def validate_condition!(condition)
+        return condition if condition.nil? || condition.is_a?(Symbol) || condition.is_a?(Proc)
+
+        raise ArgumentError, "if_condition must be a Symbol or a Proc, got #{condition.class}"
+      end
+
       def normalize_callbacks(callbacks, sync)
         return :inline if sync && callbacks.nil?
         return :async if callbacks.nil?
+        if sync
+          raise ArgumentError,
+                "sync: true already means inline callbacks; drop callbacks: #{callbacks.inspect}"
+        end
 
-        mode = callbacks == false ? :disabled : callbacks.to_sym
+        mode = case callbacks
+               when false then :disabled
+               when true then :async
+               else callbacks.to_s.to_sym
+               end
         validate!(mode, CALLBACK_MODES, "callbacks")
       end
 

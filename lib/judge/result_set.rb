@@ -14,6 +14,8 @@ module Judge
 
     def initialize(results, model: nil, usage: nil, latency: nil, raw: nil)
       @results = results.to_h { |r| [r.name, r] }.freeze
+      raise ArgumentError, "duplicate result names" if @results.size != results.size
+
       @model = model
       @usage = usage
       @latency = latency
@@ -32,8 +34,14 @@ module Judge
         question.coerce(payload, name: name)
       end
 
-      usage = body["usage"] && Usage.new(body["usage"]["input_tokens"], body["usage"]["output_tokens"])
+      usage = parse_usage(body["usage"])
       new(results, model: body["model"], usage: usage, latency: latency, raw: body)
+    end
+
+    def self.parse_usage(raw)
+      return unless raw.is_a?(Hash)
+
+      Usage.new(raw["input_tokens"], raw["output_tokens"]).freeze
     end
 
     def [](name)

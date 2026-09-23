@@ -25,8 +25,10 @@ module Judge
         say ""
         say "       bin/rails generate judge:attribute Ticket urgency:noul intent:choice"
         say ""
-        say "  3. Edit the generated questions, run bin/rails db:migrate, and call"
-        say "     ticket.judge_refresh! to compute them."
+        say "  3. Replace the TODO questions and check judge_source: until you do, every save"
+        say "     is judged with the placeholder wording, and each judgment is a billed call."
+        say "  4. Run bin/rails db:migrate. Async attributes (the default) need ActiveJob;"
+        say "     backfill existing rows with Ticket.judge_refresh_all."
         say ""
       end
     end

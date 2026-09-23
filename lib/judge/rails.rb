@@ -8,29 +8,34 @@ require "judge/rails/registry"
 require "judge/rails/storage"
 require "judge/rails/attributes"
 require "judge/rails/migration"
+require "judge/rails/refresh"
+require "judge/rails/jobs"
+require "judge/rails/scopes"
+require "judge/rails/relation"
+require "judge/rails/validator"
 
 module Judge
   module Rails
-    OPTIONAL_PARTS = %w[refresh jobs scopes relation validator].freeze
+    CONCERNS = [Attributes, Refresh, Jobs, Scopes, Validator].freeze
 
-    def self.load_optional_parts
-      OPTIONAL_PARTS.each do |part|
-        path = File.expand_path("rails/#{part}.rb", __dir__)
-        require "judge/rails/#{part}" if File.exist?(path)
-      end
+    def self.logger
+      Judge.config.logger || ActiveRecord::Base.logger
     end
 
-    def self.concerns
-      %i[Attributes Refresh Jobs Scopes Validator].filter_map do |name|
-        const_get(name) if const_defined?(name, false)
-      end
+    def self.log_failure(context, error)
+      logger&.error("[judge] refresh failed for #{context}: #{error.class}: #{error.message}")
     end
   end
 end
 
-Judge::Rails.load_optional_parts
+Judge::Pool.on_worker_exit do
+  pool = ActiveRecord::Base.connection_handler.retrieve_connection_pool(ActiveRecord::Base.connection_specification_name)
+  pool.release_connection if pool&.active_connection?
+end
 
 ActiveSupport.on_load(:active_record) do
-  Judge::Rails.concerns.each { |mod| include mod }
-  extend Judge::Rails::Relation::ClassMethods if defined?(Judge::Rails::Relation::ClassMethods)
+  Judge::Rails::CONCERNS.each { |mod| include mod }
+  extend Judge::Rails::Relation::ClassMethods
 end
+
+ActiveSupport.on_load(:active_job) { require "judge/rails/refresh_job" }

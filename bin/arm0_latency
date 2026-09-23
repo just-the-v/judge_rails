@@ -28,9 +28,16 @@ TICKET
 
 abort "set TYPESAFE_API_KEY or JEV_API_KEY" if Judge.config.api_key.nil?
 
+URGENCY = {
+  true: { what: "Money is stuck, a service is broken, or the customer is escalating",
+          examples: ["Our checkout has returned errors for the last hour"] },
+  false: { what: "A question, a request, or anything that can wait until tomorrow",
+           examples: ["How do I export last month's invoices?"] }
+}.freeze
+
 def questions_for(count)
   (0...count).to_h do |i|
-    [:"row#{i}", Judge.noul("Answer only about the row whose id is #{i}. Is this message urgent?",
+    [:"row#{i}", Judge.noul("Answer only about the row whose id is #{i}. Is this message urgent?", URGENCY,
                             name: :"row#{i}")]
   end
 end

@@ -331,6 +331,51 @@ class JudgeScopesTest < JudgeRailsTest
     assert_equal(["refund please"], adapter.calls.map { |c| c[:state] })
   end
 
+  def test_a_choice_filter_needs_an_option_and_uses_its_probability
+    ticket("billing", body: "charged twice")
+    question = Judge.choice("What is it?", %w[billing technical sales])
+
+    assert_raises(ArgumentError) { klass.judge_filter(question, limit: 5) }
+    assert_equal 0, adapter.call_count
+    assert_equal ["billing"], klass.judge_filter(question, option: "billing", limit: 5).map(&:subject)
+    assert_empty klass.judge_filter(question, option: "technical", limit: 5)
+  end
+
+  def test_a_score_filter_needs_a_level
+    ticket("cross", body: "annoyed")
+    question = Judge.score("How frustrated?", ["Calm", "Frustrated", "Very angry"])
+
+    assert_raises(ArgumentError) { klass.judge_filter(question, limit: 5) }
+    assert_equal ["cross"], klass.judge_filter(question, at_least: "Frustrated", limit: 5).map(&:subject)
+    assert_empty klass.judge_filter(question, at_least: "Very angry", limit: 5)
+  end
+
+  def test_identical_texts_are_asked_once
+    3.times { |i| ticket("t#{i}", body: "same text") }
+
+    klass.judge_map("mentions a refund", limit: 10, source: :body)
+
+    assert_equal 1, adapter.call_count
+  end
+
+  def test_a_bad_threshold_is_rejected_before_any_call
+    ticket("t", body: "x")
+
+    assert_raises(ArgumentError) { klass.judge_filter("refund?", limit: 5, threshold: 5) }
+    assert_equal 0, adapter.call_count
+  end
+
+  def test_noul_scopes_reject_a_value_that_is_not_a_probability
+    assert_raises(ArgumentError) { klass.urgency_above("high") }
+  end
+
+  def test_scopes_exist_as_soon_as_the_attribute_is_declared
+    fresh = model { judge_attribute :urgency, Judge.noul("urgent?"), source: :body }
+
+    assert fresh.singleton_class.method_defined?(:urgency_above)
+    assert_respond_to fresh, :judge_computed
+  end
+
   private
 
   def refund_client!

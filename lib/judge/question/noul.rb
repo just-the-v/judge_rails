@@ -3,16 +3,19 @@
 module Judge
   class Question
     class Noul < Question
+      TYPE = "noul"
+      KEYS = %w[true false].freeze
+
       private
 
       def normalize(criteria)
         return nil if criteria.nil?
 
-        unless criteria.is_a?(Hash)
-          raise ArgumentError, "noul criteria must be a hash with 'true' and 'false' keys"
+        unless criteria.is_a?(Hash) && criteria.keys.map(&:to_s).sort == KEYS.sort
+          raise ArgumentError, "noul criteria must be a hash with exactly 'true' and 'false' keys"
         end
 
-        criteria.to_h { |k, v| [k.to_s, v.to_s] }
+        entries(criteria)
       end
     end
   end

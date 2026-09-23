@@ -5,57 +5,106 @@ module Judge
     module Relation
       ADHOC_NAME = :judge_adhoc
 
+      Target = Struct.new(:question, :option, :level) do
+        def measure(result)
+          case question.type
+          when "choice" then result.probability_of(option) || 0.0
+          else result.value
+          end
+        end
+
+        def passes?(result, threshold)
+          return result.value >= level - 0.5 if question.type == "score"
+
+          measure(result) >= threshold
+        end
+      end
+
       module ClassMethods
-        def judge_filter(question, limit: nil, source: nil, threshold: 0.5, model: nil, adapter: nil,
-                         concurrency: nil)
+        def judge_filter(question, limit: nil, source: nil, threshold: 0.5, option: nil, at_least: nil,
+                         model: nil, adapter: nil, concurrency: nil)
+          question = judge_adhoc_question(question)
+          target = judge_target(question, :judge_filter, option: option, at_least: at_least)
+          judge_check_threshold!(threshold)
           judged = judge_judge(question, :judge_filter, limit: limit, source: source, model: model,
                                                         adapter: adapter, concurrency: concurrency)
-          judged.select { |_record, result| Relation.passes?(result, threshold) }.keys
+          judged.select { |_record, result| target.passes?(result, threshold) }.keys
         end
 
         def judge_map(question, limit: nil, source: nil, model: nil, adapter: nil, concurrency: nil)
-          judge_judge(question, :judge_map, limit: limit, source: source, model: model, adapter: adapter,
-                                            concurrency: concurrency)
+          judge_judge(judge_adhoc_question(question), :judge_map, limit: limit, source: source, model: model,
+                                                                  adapter: adapter, concurrency: concurrency)
         end
 
-        def judge_sort(question, limit: nil, source: nil, dir: :desc, model: nil, adapter: nil,
+        def judge_sort(question, limit: nil, source: nil, dir: :desc, option: nil, model: nil, adapter: nil,
                        concurrency: nil)
           direction = dir.to_s.downcase.to_sym
           unless %i[asc desc].include?(direction)
             raise ArgumentError, "dir must be :asc or :desc, got #{dir.inspect}"
           end
 
+          question = judge_adhoc_question(question)
+          target = judge_target(question, :judge_sort, option: option, at_least: :any)
           judged = judge_judge(question, :judge_sort, limit: limit, source: source, model: model,
                                                       adapter: adapter, concurrency: concurrency)
           sign = direction == :asc ? 1 : -1
-          judged.sort_by { |_record, result| sign * Relation.rank(result) }.map(&:first)
+          judged.sort_by { |_record, result| sign * target.measure(result) }.map(&:first)
         end
 
         private
 
+        def judge_adhoc_question(question)
+          question.is_a?(Judge::Question) ? question : Judge.noul(question.to_s)
+        end
+
+        def judge_target(question, caller_name, option:, at_least:)
+          case question.type
+          when "choice" then Target.new(question, judge_target_option(question, option, caller_name), nil)
+          when "score" then Target.new(question, nil, judge_target_level(question, at_least, caller_name))
+          else Target.new(question, nil, nil)
+          end
+        end
+
+        def judge_target_option(question, option, caller_name)
+          return option.to_s if question.options.include?(option.to_s)
+
+          raise ArgumentError, "#{caller_name} with a choice question needs option: one of " \
+                               "#{question.options.inspect}, got #{option.inspect}"
+        end
+
+        def judge_target_level(question, at_least, caller_name)
+          return nil if at_least == :any
+
+          if at_least.nil?
+            raise ArgumentError, "#{caller_name} with a score question needs at_least: one of " \
+                                 "#{question.levels.inspect}"
+          end
+          judge_level(at_least, question.levels, caller_name)
+        end
+
+        def judge_check_threshold!(threshold)
+          return if threshold.is_a?(Numeric) && threshold.between?(0, 1)
+
+          raise ArgumentError, "threshold must be a number between 0 and 1, got #{threshold.inspect}"
+        end
+
         def judge_judge(question, caller_name, limit:, source:, model:, adapter:, concurrency:)
           judge_check_limit!(limit, caller_name)
-          definition = Definition.new(
-            name: ADHOC_NAME,
-            question: question.is_a?(Judge::Question) ? question : Judge.noul(question.to_s),
-            source: judge_adhoc_source(source, caller_name)
-          )
+          definition = Definition.new(name: ADHOC_NAME, question: question,
+                                      source: judge_adhoc_source(source, caller_name))
 
-          records = all.limit([all.limit_value, limit].compact.min).to_a
+          records = all.limit([all.limit_value&.then { |value| Integer(value) }, limit].compact.min).to_a
           # Built here so the workers below never check out a database connection.
           judgeable = records.map { |record| [record, definition.state_for(record)] }
                              .reject { |_record, state| state.empty? }
 
-          states = judgeable.map(&:last)
-          results = Judge::Pool.map(states, concurrency: judge_concurrency(concurrency)) do |state|
-            Judge.ask(definition.question, text: state, model: model, adapter: adapter)
+          texts = judgeable.map(&:last).uniq
+          answers = Judge::Pool.map(texts, concurrency: concurrency) do |text|
+            Judge.ask(definition.question, text: text, model: model, adapter: adapter)
           end
+          by_text = texts.zip(answers).to_h
 
-          judgeable.map(&:first).zip(results).to_h
-        end
-
-        def judge_concurrency(override)
-          override || Judge.config.concurrency || Judge::Pool::DEFAULT_CONCURRENCY
+          judgeable.to_h { |record, state| [record, by_text.fetch(state)] }
         end
 
         def judge_check_limit!(limit, caller_name)
@@ -77,18 +126,6 @@ module Judge
                 "#{caller_name} needs source: (a column symbol or a callable returning the text to judge), " \
                 "or a model-level judge_source"
         end
-      end
-
-      def self.passes?(result, threshold)
-        score = result.type == "noul" ? result.value : (result.probability || result.confidence)
-        !score.nil? && score >= threshold
-      end
-
-      def self.rank(result)
-        value = result.value
-        return value.to_f if value.is_a?(Numeric)
-
-        (result.probability || result.confidence || 0).to_f
       end
     end
   end

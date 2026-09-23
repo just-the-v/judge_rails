@@ -3,6 +3,7 @@
 require "json"
 require "net/http"
 require "openssl"
+require "zlib"
 require "uri"
 
 module Judge
@@ -11,7 +12,8 @@ module Judge
     BACKOFF_CAP = 8.0
     CONNECTIONS_KEY = :judge_client_connections
     TRANSPORT_ERRORS = [Timeout::Error, SocketError, IOError, SystemCallError, OpenSSL::SSL::SSLError,
-                        Net::ProtocolError, Net::HTTPBadResponse].freeze
+                        Net::ProtocolError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Zlib::Error].freeze
+    UNSAFE_TO_RESEND = [Net::ReadTimeout].freeze
     RETRYABLE_STATUSES = (500..599)
 
     attr_reader :config
@@ -20,11 +22,17 @@ module Judge
     def self.close_thread_connections
       store = Thread.current[CONNECTIONS_KEY]
       Thread.current[CONNECTIONS_KEY] = nil
-      store&.each_value do |http|
+      return unless store && store[:pid] == Process.pid
+
+      store[:connections].each_value do |http|
         http.finish if http.started?
       rescue IOError
         nil
       end
+    end
+
+    def inspect
+      "#<Judge::Client base_url=#{@config.base_url.inspect} model=#{@config.model.inspect}>"
     end
 
     def initialize(config: nil, sleeper: nil)
@@ -86,8 +94,8 @@ module Judge
     end
 
     def retry_delay(response, status, attempt)
-      after = status == 429 ? retry_after(response) : nil
-      raise error_for(status, response) if after && after > @config.max_retry_wait
+      after = [429, 503].include?(status) ? retry_after(response) : nil
+      raise error_for(status, response) if after && @config.max_retry_wait && after > @config.max_retry_wait
 
       after || backoff(attempt)
     end
@@ -100,7 +108,9 @@ module Judge
     rescue *TRANSPORT_ERRORS => e
       close_connection
       log(e.class.name, monotonic - started, attempt)
-      raise TransportError, "#{e.class}: #{e.message}" if attempt > @config.max_retries
+      if attempt > @config.max_retries || UNSAFE_TO_RESEND.any? { |klass| e.is_a?(klass) }
+        raise TransportError, "#{e.class}: #{e.message}"
+      end
 
       pause(backoff(attempt))
       nil
@@ -127,7 +137,7 @@ module Judge
     end
 
     def connection
-      store = (Thread.current[CONNECTIONS_KEY] ||= {})
+      store = connections
       key = connection_key
       http = store[key]
       return http if http&.started?
@@ -147,9 +157,17 @@ module Judge
       http
     end
 
-    def close_connection
+    def connections
       store = Thread.current[CONNECTIONS_KEY]
-      http = store&.delete(connection_key)
+      unless store && store[:pid] == Process.pid
+        store = { pid: Process.pid, connections: {} }
+        Thread.current[CONNECTIONS_KEY] = store
+      end
+      store[:connections]
+    end
+
+    def close_connection
+      http = connections.delete(connection_key)
       http.finish if http&.started?
     rescue IOError
       nil
@@ -194,6 +212,7 @@ module Judge
       case status
       when 401, 403 then AuthenticationError.new(message, status: status, body: body)
       when 400, 404, 422 then InvalidRequestError.new(message, status: status, body: body)
+      when 413 then PayloadTooLargeError.new(message, status: status, body: body)
       when 429
         RateLimitError.new(message, status: status, body: body, retry_after: retry_after(response))
       when RETRYABLE_STATUSES then ServerError.new(message, status: status, body: body)
@@ -203,8 +222,11 @@ module Judge
 
     def error_message(body)
       parsed = JSON.parse(body)
+      return truncate(body) unless parsed.is_a?(Hash)
+
       error = parsed["error"]
-      (error.is_a?(Hash) ? error["message"] : error) || parsed["message"] || truncate(body)
+      message = error.is_a?(Hash) ? error["message"] : error
+      (message || parsed["message"] || truncate(body)).to_s
     rescue JSON::ParserError
       truncate(body)
     end
@@ -227,3 +249,5 @@ module Judge
     end
   end
 end
+
+Judge::Pool.on_worker_exit { Judge::Client.close_thread_connections }

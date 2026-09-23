@@ -62,12 +62,11 @@ only moves when you ask:
 
 ```ruby
 ticket.judge_refresh          # recompute in memory
-ticket.judge_refresh!         # recompute and save
+ticket.judge_refresh!         # recompute and store the judgment columns
 ticket.judge_refresh_later    # enqueue it
 ```
 
-This is the mode for a column you backfill deliberately rather than maintain continuously, and it is
-what makes `judge_refresh_all` below do anything.
+This is the mode for a column you backfill deliberately rather than maintain continuously.
 
 ## Backfill
 
@@ -78,16 +77,20 @@ summary.to_h   # => {records: 250, computed: 250, skipped: 0, failed: 0, calls: 
 Ticket.where(channel: "chat").judge_refresh_all(resume: true)
 ```
 
-`resume: true` skips records whose judgments are already current, so an interrupted run continues
-where it stopped rather than paying for everything again. It walks in batches and keeps the last
-good value on failure, counting the failure rather than aborting.
+Records whose judgments are already current are skipped, so an interrupted run continues where it
+stopped rather than paying for everything again. `resume: true` keeps that guarantee even when you pass
+`force: true`. Each record is judged with its own class's attributes, so an STI subclass gets its own
+questions. A failure is counted, not raised: judgments already paid for on that record are stored, and
+the rest keep their last value.
 
 It makes one call per record. That is deliberate: several records sharing one request degrades the
 judgment badly, which `BENCHMARK.md` measures. To go faster, go wider, not fuller.
 
 ## The enqueuer
 
-ActiveJob is optional. The gem enqueues through one injectable callable, so a different queue system
+ActiveJob is optional, as long as something enqueues: without ActiveJob and without an enqueuer of your
+own, the first async save raises `Judge::ConfigurationError`. The gem enqueues through one injectable
+callable, so a different queue system
 is a lambda:
 
 ```ruby
@@ -120,11 +123,13 @@ Judge::Pool.map(texts, concurrency: 8) { |text| Judge.ask(question, text: text) 
 
 Input order is preserved. `concurrency: 1` runs inline without creating a thread. The first error
 drains the queue so no new request starts, then is re-raised once every worker has stopped, so
-nothing is left running behind a raise. The same holds when the caller is interrupted, by
-`Rack::Timeout` for instance: requests in flight finish, and nothing new starts.
+nothing is left running behind a raise. When the caller is interrupted, by `Rack::Timeout` for
+instance, it gets control back at once: nothing new starts, and requests already in flight finish in
+the background.
 
-Workers run inside the Rails executor when Rails is loaded, carry the caller's log tags, and close
-their connections when they exit.
+The gem's own workers only make HTTP calls. They run outside the Rails executor, so they cannot wait on a
+lock the caller holds, and they carry the caller's log tags. When a worker exits it closes its HTTP
+connections and returns any database connection your block leased.
 
 Measured against the live API on 100 records: 1.9x at 2 threads, 3.6x at 4, 6.9x at 8, 11.7x at 16,
 18.4x at 32, with no rate limiting observed and input tokens identical at every level. Efficiency

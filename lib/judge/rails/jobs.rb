@@ -5,7 +5,8 @@ module Judge
     module Jobs
       extend ActiveSupport::Concern
 
-      RETRYABLE_ERRORS = [Judge::RateLimitError, Judge::ServerError, Judge::TransportError].freeze
+      RETRYABLE_ERRORS = [Judge::RateLimitError, Judge::ServerError, Judge::TransportError,
+                          ActiveRecord::Deadlocked, ActiveRecord::LockWaitTimeout].freeze
 
       Payload = Struct.new(:model, :ids, :names, keyword_init: true) do
         def model_name
@@ -14,10 +15,16 @@ module Judge
       end
 
       class << self
-        attr_writer :enqueuer
-
         def enqueuer
-          @enqueuer ||= method(:default_enqueue)
+          @enqueuer || method(:default_enqueue)
+        end
+
+        def enqueuer=(callable)
+          unless callable.respond_to?(:call)
+            raise ArgumentError, "enqueuer must respond to call. Use reset_enqueuer! to restore ActiveJob"
+          end
+
+          @enqueuer = callable
         end
 
         def reset_enqueuer!
@@ -25,7 +32,7 @@ module Judge
         end
 
         def enqueue_record(record, names)
-          dispatch(Payload.new(model: record.class, ids: [record.id], names: Array(names)))
+          enqueuer.call(Payload.new(model: record.class, ids: [record.id], names: Array(names)))
         end
 
         def perform(payload, batch_size: 100, adapter: nil, raise_retryable: false)
@@ -42,51 +49,42 @@ module Judge
         rescue *RETRYABLE_ERRORS => e
           raise if raise_retryable
 
-          log(record.class, e)
+          Judge::Rails.log_failure(record.class, e)
           false
         rescue StandardError => e
-          log(record.class, e)
+          Judge::Rails.log_failure(record.class, e)
           false
-        end
-
-        def log(context, error)
-          logger = Judge.config.logger
-          logger&.error("[judge] refresh failed for #{context}: #{error.class}: #{error.message}")
         end
 
         private
 
-        def dispatch(payload)
-          enqueuer.call(payload)
+        def default_enqueue(payload)
+          refresh_job.perform_later(payload.model_name, payload.ids.first, payload.names.map(&:to_s))
         end
 
-        def default_enqueue(payload)
-          return unless defined?(Judge::Rails::RefreshJob)
+        def refresh_job
+          require "judge/rails/refresh_job" if defined?(::ActiveJob)
+          return Judge::Rails::RefreshJob if defined?(Judge::Rails::RefreshJob)
 
-          Judge::Rails::RefreshJob.perform_later(payload.model_name, payload.ids.first,
-                                                 payload.names.map(&:to_s))
+          raise Judge::ConfigurationError,
+                "async judge attributes need ActiveJob or a custom Judge::Rails::Jobs.enqueuer. " \
+                "Otherwise declare them with sync: true or callbacks: false"
         end
       end
 
       class_methods do
         def judge_install_callbacks(definition)
-          judge_install_clear_callback if definition.sync? || definition.enqueue?
-          judge_install_inline_callback if definition.sync?
+          judge_install_save_callback if definition.sync? || definition.enqueue?
           judge_install_commit_callback if definition.enqueue?
         end
 
-        def judge_install_clear_callback
-          return if defined?(@judge_clear_callback) && @judge_clear_callback
+        private
 
-          @judge_clear_callback = true
-          before_save :judge_clear_blank
-        end
+        def judge_install_save_callback
+          return if defined?(@judge_save_callback) && @judge_save_callback
 
-        def judge_install_inline_callback
-          return if defined?(@judge_inline_callback) && @judge_inline_callback
-
-          @judge_inline_callback = true
-          before_save :judge_compute_inline
+          @judge_save_callback = true
+          before_save :judge_before_save
         end
 
         def judge_install_commit_callback
@@ -94,7 +92,6 @@ module Judge
 
           @judge_commit_callback = true
           after_commit :judge_enqueue_refresh, on: %i[create update]
-          after_rollback :judge_forget_refreshed
         end
       end
 
@@ -106,16 +103,11 @@ module Judge
 
       private
 
-      def judge_clear_blank
-        Storage.clear_blank(self, self.class.judge_attributes.select { |d| d.sync? || d.enqueue? })
-        nil
-      end
-
-      def judge_compute_inline
-        definitions = self.class.judge_attributes.select(&:sync?)
-        return if definitions.empty?
-
-        Storage.groups(Storage.pending(self, definitions)).each do |(state, model), group|
+      def judge_before_save
+        automatic = self.class.judge_attributes.select { |d| d.sync? || d.enqueue? }
+        pending, blank = Storage.plan(self, automatic)
+        blank.each { |definition| Storage.clear(self, definition) }
+        Storage.groups(pending.select { |definition, _| definition.sync? }).each do |(state, model), group|
           compute_group_inline(state, model, group)
         end
       end
@@ -130,7 +122,7 @@ module Judge
         modes = group.map(&:on_error)
         raise error if modes.include?(:raise)
 
-        Jobs.log(self.class, error)
+        Judge::Rails.log_failure(self.class, error)
         return unless modes.include?(:fail)
 
         names = group.select { |d| d.on_error == :fail }.map(&:name)
@@ -139,25 +131,8 @@ module Judge
       end
 
       def judge_enqueue_refresh
-        refreshed = judge_refreshed
-        judge_forget_refreshed
-        definitions = self.class.judge_attributes.select(&:enqueue?).reject { |d| refreshed.include?(d.name) }
-        pending = Storage.stale_definitions(self, definitions)
-        return if pending.empty?
-
-        Jobs.enqueue_record(self, pending.map(&:name))
-      end
-    end
-
-    if defined?(ActiveJob::Base)
-      class RefreshJob < ActiveJob::Base
-        queue_as :default
-        retry_on(*Jobs::RETRYABLE_ERRORS, wait: :polynomially_longer, attempts: 5)
-
-        def perform(model_name, id, names = [])
-          payload = Jobs::Payload.new(model: model_name.constantize, ids: [id], names: names)
-          Jobs.perform(payload, raise_retryable: true)
-        end
+        pending = Storage.stale_definitions(self, self.class.judge_attributes.select(&:enqueue?))
+        Jobs.enqueue_record(self, pending.map(&:name)) if pending.any?
       end
     end
   end

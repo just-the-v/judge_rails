@@ -292,4 +292,85 @@ class ValidatorTest < JudgeRailsTest
 
     assert_raises(ArgumentError) { klass.new(body: "hello").valid? }
   end
+
+  def test_an_array_validation_context_is_matched
+    use_client(scripted_client({ "is spam" => 0.97 }))
+    klass = model { validates :body, judge: { refute: "is spam" }, on: :create }
+
+    refute klass.new(body: "buy cheap watches").valid?(%i[create review])
+  end
+
+  def test_only_the_current_text_stays_cached
+    use_client(scripted_client({ "is spam" => 0.03 }))
+    klass = model { validates :body, judge: { refute: "is spam" } }
+    record = klass.new(body: "first")
+    5.times do |i|
+      record.body = "edit #{i}"
+      record.valid?
+    end
+
+    assert_equal 1, record.instance_variable_get(:@judge_judgments).size
+  end
+
+  def test_a_plain_active_model_object_keeps_one_judgment_per_attribute
+    use_client(scripted_client({ "is spam" => 0.03 }))
+    form = SpamForm.new
+    5.times do |i|
+      form.body = "edit #{i}"
+      form.valid?
+    end
+
+    assert_equal 1, form.instance_variable_get(:@judge_judgments).size
+  end
+
+  def test_a_skipped_validation_never_reads_its_attribute
+    use_client(scripted_client({}, default: 0.02))
+    klass = model do
+      validates :body, judge: { refute: "is spam" }
+      validates :subject, judge: { refute: "is rude" }, if: -> { false }
+      define_method(:subject) { raise "must not be read" }
+    end
+
+    assert_predicate klass.new(body: "hello"), :valid?
+  end
+
+  def test_a_copy_does_not_share_the_judgment_cache
+    klass = model { validates :body, judge: { refute: "is spam" } }
+    original = klass.new(body: "first text")
+    original.valid?
+    copy = original.dup
+
+    refute_same original.instance_variable_get(:@judge_judgments),
+                copy.instance_variable_get(:@judge_judgments)
+  end
+
+  def test_a_one_argument_lambda_runs_against_the_record
+    use_client(scripted_client({ "is spam" => 0.97 }))
+    klass = model { validates :body, judge: { refute: "is spam" }, if: ->(_ticket) { channel == "web" } }
+
+    refute_predicate klass.new(body: "buy watches", channel: "web"), :valid?
+  end
+
+  def test_strict_raises
+    use_client(scripted_client({ "is spam" => 0.97 }))
+    klass = model { validates :body, judge: { refute: "is spam" }, strict: true }
+
+    assert_raises(ActiveModel::StrictValidationFailed) { klass.new(body: "buy watches").valid? }
+  end
+
+  def test_errors_carry_a_type_and_the_instruction
+    use_client(scripted_client({ "is spam" => 0.97 }))
+    record = model { validates :body, judge: { refute: "is spam" } }.new(body: "buy watches")
+    record.valid?
+
+    assert record.errors.of_kind?(:body, :judge_refuted)
+    assert_equal "is spam", record.errors.details[:body].first[:instruction]
+  end
+
+  def test_a_frozen_form_object_can_be_validated
+    skip "ActiveModel 7.2 cannot validate any frozen object" if ActiveModel.version < Gem::Version.new("8.0")
+    use_client(scripted_client({ "is spam" => 0.02 }))
+
+    assert_predicate SpamForm.new(body: "hello").freeze, :valid?
+  end
 end

@@ -227,6 +227,7 @@ class AttributesTest < JudgeRailsTest
     record.judge_refresh!
     record.update!(body: "")
 
+    assert_equal [:urgency], record.judge_pending
     assert_equal [:urgency], record.judge_refresh!
     record.reload
 
@@ -258,7 +259,7 @@ class AttributesTest < JudgeRailsTest
 
     klass.new(body: "charged twice").judge_refresh
 
-    assert_equal [nil, "jev-pinned-9"], adapter.calls.map { |c| c[:model] }.sort_by(&:to_s)
+    assert_equal %w[jev-latest jev-pinned-9], adapter.calls.map { |c| c[:model] }.sort
   end
 
   def test_changing_the_pinned_model_makes_the_value_stale
@@ -285,5 +286,101 @@ class AttributesTest < JudgeRailsTest
     record.judge_refresh
 
     assert_equal 1, reads
+  end
+
+  def test_no_model_and_the_default_model_share_one_call
+    klass = model do
+      judge_source :body
+      judge_attribute :urgency, Judge.noul("urgent?"), callbacks: false
+      judge_attribute :intent, Judge.choice("What is it?", %w[billing technical]), model: "jev-latest",
+                                                                                   callbacks: false
+    end
+
+    klass.new(body: "charged twice").judge_refresh
+
+    assert_equal(["jev-latest"], adapter.calls.map { |c| c[:model] })
+  end
+
+  def test_changing_the_configured_model_makes_unpinned_values_stale
+    klass = model { judge_attribute :urgency, Judge.noul("urgent?"), source: :body, callbacks: false }
+    record = klass.create!(body: "down")
+    record.judge_refresh!
+    Judge.config.model = "jev-2"
+
+    assert_predicate record, :judge_stale?
+  ensure
+    Judge.config.model = Judge::Configuration::DEFAULT_MODEL
+  end
+
+  def test_saving_a_partially_selected_record_skips_judgments_it_cannot_read
+    klass = model do
+      judge_source { [subject, body] }
+      judge_attribute :urgency, Judge.noul("urgent?"), sync: true
+    end
+    klass.create!(subject: "s", body: "b")
+    adapter.reset!
+
+    klass.select(:id, :channel).find_each { |ticket| ticket.update!(channel: "web") }
+
+    assert_equal 0, adapter.call_count
+  end
+
+  def test_a_failure_part_way_keeps_the_judgments_already_paid_for
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :subject, callbacks: false
+      judge_attribute :intent, Judge.choice("What is it?", %w[billing technical]), source: :body,
+                                                                                   callbacks: false
+    end
+    record = klass.create!(subject: "subject", body: "body")
+    Judge.adapter = JudgeTestSupport::RecordingClient.new do |_question, _name, state|
+      raise Judge::ServerError, "503" if state == "body"
+    end
+
+    assert_raises(Judge::ServerError) { record.judge_refresh! }
+    assert_in_delta 0.91, klass.find(record.id).urgency
+  end
+
+  def test_computed_at_accepts_an_already_parsed_time
+    record = ticket_model.new(urgency: 0.5, urgency_judge: { "computed_at" => Time.utc(2026, 1, 1) })
+
+    assert_equal Time.utc(2026, 1, 1), record.urgency_computed_at
+  end
+
+  def test_declaration_errors_surface_at_load_time
+    assert_raises(ArgumentError) { model { judge_attribute :urgency, Judge.noul("urgent?"), source: 42 } }
+    assert_raises(ArgumentError) do
+      model { judge_attribute :urgency, Judge.noul("urgent?"), source: :body, sync: true, callbacks: :async }
+    end
+    assert_predicate model { judge_attribute :urgency, Judge.noul("u?"), source: :body, callbacks: true }
+      .judge_definition(:urgency), :enqueue?
+  end
+
+  def test_sti_rows_are_backfilled_with_their_own_definitions
+    base = model do
+      define_singleton_method(:name) { "BaseTicket" }
+      self.inheritance_column = :channel
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :body, callbacks: false
+    end
+    vip = Class.new(base) do
+      define_singleton_method(:name) { "VipTicket" }
+      judge_attribute :intent, Judge.choice("What is it?", %w[billing technical]), source: :body,
+                                                                                   callbacks: false
+    end
+    Object.const_set(:BaseTicket, base)
+    Object.const_set(:VipTicket, vip)
+    record = vip.create!(body: "charged twice")
+
+    base.judge_refresh_all
+
+    assert_equal "billing", vip.find(record.id).intent
+  ensure
+    Object.send(:remove_const, :VipTicket) if Object.const_defined?(:VipTicket)
+    Object.send(:remove_const, :BaseTicket) if Object.const_defined?(:BaseTicket)
+  end
+
+  def test_an_attribute_without_its_columns_fails_loudly
+    klass = model { judge_attribute :spam, Judge.noul("spam?"), source: :body, callbacks: false }
+
+    assert_raises(ActiveModel::MissingAttributeError) { klass.new(body: "x").judge_refresh }
   end
 end

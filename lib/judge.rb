@@ -9,6 +9,7 @@ require "judge/question/choice"
 require "judge/question/score"
 require "judge/result"
 require "judge/result_set"
+require "judge/decision"
 require "judge/facade"
 require "judge/adapter"
 require "judge/pool"
@@ -18,9 +19,11 @@ module Judge
 
   autoload :Client, "judge/client"
 
+  @config_lock = Mutex.new
+
   class << self
     def config
-      @config ||= Configuration.new
+      @config || @config_lock.synchronize { @config ||= Configuration.new }
     end
 
     def configure
@@ -31,6 +34,7 @@ module Judge
     def reset_config!
       @config = Configuration.new
       self.adapter = nil
+      Adapter.reset_built!
       config
     end
   end

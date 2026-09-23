@@ -147,4 +147,31 @@ class AdapterTest < Minitest::Test
     assert_equal 1, first.seen.size
     assert_equal 1, second.seen.size
   end
+
+  def test_re_registering_the_configured_name_takes_effect
+    first = FakeProvider.new
+    second = FakeProvider.new
+    Judge::Adapter.register(:swap) { first }
+    Judge.configure { |c| c.adapter = :swap }
+    Judge.ask("is it urgent?", text: "x")
+    Judge::Adapter.register(:swap) { second }
+    Judge.ask("is it urgent?", text: "x")
+
+    assert_equal 1, second.seen.size
+  end
+
+  def test_an_adapter_object_can_be_configured_directly
+    provider = FakeProvider.new
+    Judge.configure { |c| c.adapter = provider }
+
+    Judge.ask("is it urgent?", text: "x")
+
+    assert_equal 1, provider.seen.size
+  end
+
+  def test_an_adapter_that_omits_an_answer_raises_a_judge_error
+    Judge.adapter = ->(**) { Judge::ResultSet.new([]) }
+
+    assert_raises(Judge::InvalidResponseError) { Judge.ask("is it urgent?", text: "x") }
+  end
 end

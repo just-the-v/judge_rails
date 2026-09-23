@@ -387,4 +387,71 @@ class ClientTest < Minitest::Test
     responder&.kill
     plain&.close
   end
+
+  def test_a_nil_max_retry_wait_means_no_cap
+    server = serve do |_req, index|
+      index.zero? ? [429, { "Retry-After" => "120" }, "{}"] : [200, {}, LIVE_RESPONSE]
+    end
+
+    client_for(server, max_retry_wait: nil).call(state: "hi", questions: questions)
+
+    assert_equal [120.0], @slept
+  end
+
+  def test_a_read_timeout_is_not_resent
+    server = serve do |_req, _i|
+      sleep 0.3
+      [200, {}, LIVE_RESPONSE]
+    end
+
+    assert_raises(Judge::TransportError) do
+      client_for(server, timeout: 0.1, max_retries: 2).call(state: "hi", questions: questions)
+    end
+    assert_equal 1, server.requests.size
+  end
+
+  def test_retry_after_is_honoured_on_service_unavailable
+    server = serve do |_req, index|
+      index.zero? ? [503, { "Retry-After" => "0.02" }, "{}"] : [200, {}, LIVE_RESPONSE]
+    end
+
+    client_for(server).call(state: "hi", questions: questions)
+
+    assert_equal [0.02], @slept
+  end
+
+  def test_an_error_body_that_is_not_an_object_still_maps_to_an_api_error
+    ["null", "[]", "502", "true"].each do |body|
+      server = serve { |_req, _i| [400, {}, body] }
+
+      error = assert_raises(Judge::InvalidRequestError) do
+        client_for(server).call(state: "hi", questions: questions)
+      end
+      assert_includes error.message, body
+    end
+  end
+
+  def test_a_413_is_a_payload_too_large_error
+    server = serve { |_req, _i| [413, {}, '{"error":"too big"}'] }
+
+    assert_raises(Judge::PayloadTooLargeError) { client_for(server).call(state: "hi", questions: questions) }
+  end
+
+  def test_a_connection_inherited_across_fork_is_never_reused
+    server = ok_server
+    client = client_for(server)
+    client.call(state: "hi", questions: questions)
+    Thread.current[Judge::Client::CONNECTIONS_KEY][:pid] = Process.pid + 1
+
+    client.call(state: "hi", questions: questions)
+
+    assert_equal 2, server.connections
+  end
+
+  def test_inspect_never_shows_the_key
+    client = client_for(ok_server)
+
+    refute_includes client.inspect, "test-key"
+    refute_includes client.config.inspect, "test-key"
+  end
 end

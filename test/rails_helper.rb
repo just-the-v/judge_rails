@@ -33,6 +33,10 @@ module JudgeTestSupport
   def self.model(&block)
     klass = Class.new(ActiveRecord::Base) do
       self.table_name = "judge_tickets"
+
+      def self.model_name
+        ActiveModel::Name.new(self, nil, "JudgeTicket")
+      end
     end
     klass.class_eval(&block) if block
     klass

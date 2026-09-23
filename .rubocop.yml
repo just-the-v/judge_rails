@@ -22,3 +22,6 @@ Lint/BooleanSymbol:
     - "bin/**/*"
 Style/HashLikeCase:
   Enabled: false
+Lint/UselessAccessModifier:
+  ContextCreatingMethods:
+    - class_methods

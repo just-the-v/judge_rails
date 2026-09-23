@@ -1,0 +1,6 @@
+en:
+  errors:
+    messages:
+      judge_refuted: 'matched "%{instruction}"'
+      judge_unmatched: 'did not match "%{instruction}"'
+      judge_unavailable: 'could not be checked against "%{instruction}"'

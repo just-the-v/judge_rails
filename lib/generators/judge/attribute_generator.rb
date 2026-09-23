@@ -13,8 +13,11 @@ module Judge
       desc "Adds Judge judgment attributes to a model: a migration plus the model declarations."
 
       argument :judge_attributes, type: :array, default: [], banner: "name:noul name:choice name:score"
+      class_option :database, type: :string, aliases: %i[--db],
+                              desc: "The database whose migrations path receives the migration"
 
       TYPES = %w[noul choice score].freeze
+      NAME = /\A[a-z_][a-z0-9_]*\z/
 
       QUESTION_ARGUMENTS = {
         "noul" => "",
@@ -24,6 +27,13 @@ module Judge
 
       def validate_pairs
         raise ::Rails::Generators::Error, "give at least one name:type pair" if pairs.empty?
+
+        invalid = pairs.map(&:first).grep_v(NAME)
+        unless invalid.empty?
+          raise ::Rails::Generators::Error,
+                "invalid attribute name(s) #{invalid.join(", ")}: " \
+                "use lowercase letters, digits and underscores"
+        end
 
         unknown = pairs.reject { |_, type| TYPES.include?(type) }
         return if unknown.empty?
@@ -38,15 +48,17 @@ module Judge
 
       def inject_model_declarations
         return say_status(:skip, "#{model_path} not found", :yellow) unless model_source
+        return remove_declarations if behavior == :revoke
 
-        lines = []
-        unless judge_source?
-          lines << "  judge_source { [subject, body] } # TODO: the attributes Judge should read\n"
+        declarations = missing_declarations
+        return say_status(:identical, model_path, :blue) if declarations.empty?
+
+        if judge_source?
+          inject_into_file model_path, declarations.join,
+                           after: /\A#{Regexp.escape(model_source[0...insertion_point])}/
+        else
+          inject_into_class model_path, class_name, "#{source_line}#{declarations.join}\n"
         end
-        lines.concat(missing_declarations)
-        return say_status(:identical, model_path, :blue) if lines.empty?
-
-        inject_into_class model_path, class_name, "#{lines.join}\n"
       end
 
       private
@@ -77,9 +89,42 @@ module Judge
         model_source.to_s.match?(/^\s*judge_source\b/)
       end
 
+      def insertion_point
+        lines = model_source.lines
+        class_index = lines.index do |line|
+          line.match?(/^\s*class\s+#{Regexp.escape(class_name.demodulize)}\b/)
+        end
+        indent = lines[class_index][/\A\s*/]
+        closing = lines.rindex { |line| line.match?(/\A#{indent}end\b/) }
+        lines[0...closing].join.length
+      end
+
+      def source_line
+        columns = text_columns
+        return "  judge_source { [#{columns.join(", ")}] }\n" if columns.any?
+
+        "  judge_source { [] } # TODO: the attributes Judge should read; nothing is judged until you set it\n"
+      end
+
+      def text_columns
+        model = class_name.safe_constantize
+        return [] unless model.respond_to?(:columns)
+
+        text = model.columns.select { |c| c.type == :text }.map(&:name)
+        text = model.columns.select { |c| c.type == :string }.map(&:name) if text.empty?
+        text - model.columns.map(&:name).grep(/_judge\z|_type\z/)
+      rescue StandardError
+        []
+      end
+
       def missing_declarations
-        pairs.reject { |name, _| declared?(name) }
-             .map { |name, type| "  #{declaration(name, type)}\n" }
+        pairs.reject { |name, _| declared?(name) }.map { |name, type| "  #{declaration(name, type)}\n" }
+      end
+
+      def remove_declarations
+        pairs.each do |name, type|
+          gsub_file model_path, "  #{declaration(name, type)}\n", "", force: true
+        end
       end
 
       def declared?(name)

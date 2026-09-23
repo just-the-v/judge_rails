@@ -109,4 +109,26 @@ class FacadeTest < Minitest::Test
     assert_equal "noul", result.type
     assert_equal 2, @server.request_count
   end
+
+  def test_a_key_with_surrounding_whitespace_is_trimmed
+    Judge.configure { |c| c.api_key = " sk-test\n" }
+
+    assert_equal "sk-test", Judge.config.api_key
+  end
+
+  def test_invalid_settings_fail_when_they_are_set
+    assert_raises(ArgumentError) { Judge.configure { |c| c.max_retries = nil } }
+    assert_raises(ArgumentError) { Judge.configure { |c| c.timeout = "10" } }
+    assert_raises(ArgumentError) { Judge.configure { |c| c.concurrency = 0 } }
+  end
+
+  def test_duplicate_question_names_are_rejected
+    assert_raises(ArgumentError) do
+      Judge.ask({ urgent: Judge.noul("a?"), "urgent" => Judge.noul("b?") }, text: "x")
+    end
+  end
+
+  def test_the_default_band_is_exact_at_its_floor
+    assert_equal :no, Judge::Decision.call(0.1, above: 0.9)
+  end
 end

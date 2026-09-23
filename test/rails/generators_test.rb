@@ -54,12 +54,34 @@ class JudgeMigrationHelperTest < JudgeRailsTest
     assert_equal "double", column(:urgency).sql_type
   end
 
-  def test_value_column_is_nullable_by_default_and_respects_null_option
+  def test_value_column_is_nullable_and_refuses_not_null
     run_migration { judge_attribute TABLE, :urgency, :noul }
-    run_migration { judge_attribute TABLE, :intent, :choice, null: false }
 
     assert column(:urgency).null
-    refute column(:intent).null
+    error = assert_raises(ArgumentError) do
+      run_migration do
+        judge_attribute TABLE, :intent, :choice, null: false
+      end
+    end
+    assert_match(/must allow NULL/, error.message)
+  end
+
+  def test_change_table_form
+    connection.change_table(TABLE) { |t| t.judge_attribute :urgency, :noul }
+    reload_columns
+
+    assert_equal :float, column(:urgency).type
+    assert_equal :json, column(:urgency_judge).type
+    assert_includes indexed_columns, ["urgency"]
+  end
+
+  def test_an_untyped_remove_is_irreversible_with_a_clear_message
+    run_migration { judge_attribute TABLE, :urgency, :noul }
+    migration = migration_for { remove_judge_attribute TABLE, :urgency }
+    migration.migrate(:up)
+
+    error = assert_raises(ActiveRecord::IrreversibleMigration) { migration.migrate(:down) }
+    assert_match(/needs its type/, error.message)
   end
 
   def test_value_column_is_indexed_and_no_gin_index_on_sqlite
@@ -127,14 +149,13 @@ class JudgeMigrationHelperTest < JudgeRailsTest
     connection.create_table(TABLE) do |t|
       t.string :subject
       t.judge_attribute :urgency, :noul
-      t.judge_attribute :intent, :choice, null: false
+      t.judge_attribute :intent, :choice
     end
 
     assert_equal :float, column(:urgency).type
     assert_equal :string, column(:intent).type
     assert_equal :json, column(:urgency_judge).type
     refute column(:urgency_judge).null unless mysql?
-    refute column(:intent).null
     assert_includes indexed_columns, ["urgency"]
   end
 

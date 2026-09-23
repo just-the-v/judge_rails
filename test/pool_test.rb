@@ -101,14 +101,54 @@ class PoolTest < Minitest::Test
 
   def test_workers_close_their_connections_when_they_exit
     opened = Queue.new
+    arrived = Queue.new
     Judge::Pool.map([1, 2, 3], concurrency: 3) do
       http = Net::HTTP.new("127.0.0.1", 1)
       http.define_singleton_method(:started?) { true }
       http.define_singleton_method(:finish) { opened << :closed }
-      Thread.current[Judge::Client::CONNECTIONS_KEY] = { key: http }
-      sleep 0.05
+      Thread.current[Judge::Client::CONNECTIONS_KEY] = { pid: Process.pid, connections: { key: http } }
+      arrived << 1
+      sleep 0.01 until arrived.size == 3
     end
 
     assert_equal 3, opened.size
+  end
+
+  def test_an_interrupted_caller_does_not_wait_for_calls_in_flight
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_raises(Timeout::Error) do
+      Timeout.timeout(0.1) { Judge::Pool.map([0.6, 0.6], concurrency: 2) { |delay| sleep(delay) } }
+    end
+    waited = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    assert_operator waited, :<, 0.4
+  ensure
+    Thread.list.select { |thread| thread.name == Judge::Pool::THREAD_NAME }.each(&:join)
+  end
+
+  def test_the_configured_concurrency_is_the_default
+    Judge.config.concurrency = 2
+    threads = Judge::Pool.map(Array.new(6), concurrency: nil) do
+      sleep 0.01
+      Thread.current
+    end
+
+    assert_equal 2, threads.uniq.size
+  ensure
+    Judge.config.concurrency = nil
+  end
+
+  def test_an_exception_that_is_not_a_standard_error_stops_the_queue
+    ran = Queue.new
+    assert_raises(NoMemoryError) do
+      Judge::Pool.map(1..50, concurrency: 2) do |i|
+        ran << i
+        raise NoMemoryError, "boom" if i == 1
+
+        sleep 0.01
+      end
+    end
+
+    assert_operator ran.size, :<, 10
   end
 end

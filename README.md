@@ -77,12 +77,30 @@ Judge.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very an
 Judge.score("How urgent?", 1..5)
 ```
 
-Criteria are optional on a noul and sharpen the judgment. A question fingerprints itself, which is what
-makes invalidation automatic later.
+Criteria are optional on a noul and sharpen the judgment. An entry can also be an object, the form
+TypeSafe documents for drawing a boundary between options:
+
+```ruby
+Judge.choice("Which team?", {
+  billing:   { what: "Refunds, invoices", not_for: "Bugs", examples: ["I was charged twice"] },
+  technical: { what: "Bugs, outages", not_for: "Charges or refunds", examples: ["The API returns 500"] }
+})
+Judge.noul("Does this need a human within the hour?", {
+  true:  { what: "Money is stuck or a service is down", examples: ["Checkout has failed for an hour"] },
+  false: { what: "Anything that can wait until tomorrow", examples: ["How do I export invoices?"] }
+})
+```
+
+Worth doing wherever two options can be confused. On the demo's 250 tickets this raised agreement with
+reference labels by about four points on both questions, for about 290 more input tokens per ticket,
+which is a thousandth of a cent. The demo now declares its questions this way. The labels come from
+two model annotators, not from people. `BENCHMARK.md`, arm 8, has the numbers and their limits.
+
+A question fingerprints itself, which is what makes invalidation automatic later.
 
 ```ruby
 question = Judge.choice("Which team?", %w[billing technical sales spam])
-question.digest    # => "9e08ebfeb6e0e0fa"   over type, wording and criteria
+question.digest    # => "1c3be3cf24579b81"   over type, wording and criteria
 question.options   # => ["billing", "technical", "sales", "spam"]
 
 Judge.score("How frustrated?", ["Calm", "Mildly annoyed", "Frustrated", "Very angry"]).max_level  # => 3
@@ -179,29 +197,38 @@ by comparing digests, which costs no API call.
 ticket.judge_stale?    # => false
 ticket.body = "actually, all sorted, thanks"
 ticket.judge_stale?    # => true
-ticket.judge_pending   # => [:urgency, :intent, :frustration]
+ticket.judge_pending   # => [:urgency, :intent, :frustration, :spam]
 
-ticket.judge_refresh   # recompute in memory, returns the names it touched
-ticket.judge_refresh!  # recompute and save
-ticket.judge_refresh(:urgency, force: true)
+ticket.judge_refresh                         # recompute in memory, returns the names it touched
+ticket.judge_refresh!                        # or recompute and store the judgment columns
+ticket.judge_refresh(:urgency, force: true)  # or one attribute, even if it is fresh
+```
+
+`judge_refresh!` writes only the judgment columns, with `update_columns`: no validations, no save
+callbacks, and `updated_at` does not move. Other unsaved edits on the record stay unsaved. To react to a
+new judgment, for a broadcast say, use `after_judge_refresh`:
+
+```ruby
+after_judge_refresh { broadcast_replace_later_to :tickets }
 ```
 
 Editing the wording of a question moves its digest, so every stored judgment for it goes stale on its own.
 There is no version number to remember to bump.
 
 Pinning a model does the same. Changing the pin makes every judgment made under the old one stale, and
-two attributes on the same text but different models travel in two calls instead of one.
+two attributes on the same text but different models travel in two calls instead of one. An attribute
+with no pin follows `config.model`, so changing that makes its judgments stale too.
 
 ```ruby
 judge_attribute :urgency, Judge.noul("..."), model: "jev-1.13.0"   # the rest follow config.model
 ```
 
-Blank source text has nothing to judge. The value and its sidecar are cleared, no call is made, and
-the attribute is not stale.
+Blank source text has nothing to judge, and no call is made for it. An automatic attribute clears its
+value and sidecar on save. A `callbacks: false` one shows as stale until `judge_refresh` clears it.
 
-A source should depend only on content. One that reads `updated_at` or `lock_version` changes on every
-save, including the gem's own, so the judgment stays stale. The gem never re-enqueues a refresh from its
-own save, so that costs a stale flag rather than a loop.
+A source should depend only on content. One that reads `updated_at` or a column a callback rewrites
+makes every ordinary save look like new text. The gem's own refresh never saves the record, so it cannot
+feed a loop, but each of your saves will enqueue one more judgment.
 
 ## When it runs
 
@@ -210,6 +237,9 @@ judge_attribute :urgency, Judge.noul("...")                      # async after_c
 judge_attribute :urgency, Judge.noul("..."), sync: true          # inline, during the save
 judge_attribute :urgency, Judge.noul("..."), callbacks: false    # manual only
 ```
+
+Async needs ActiveJob, or an enqueuer of your own (see [ADVANCED.md](ADVANCED.md)). Without either, the
+first save raises `Judge::ConfigurationError` instead of silently skipping the judgment.
 
 Async is the default on purpose. An HTTP call inside a save holds a pooled database connection for the
 whole request, so a slow vendor exhausts the pool and takes down more than the feature. A save that
@@ -266,6 +296,20 @@ Ticket.judge_filter("mentions a chargeback")
 # ArgumentError: judge_filter requires limit:. It makes one API call per row.
 ```
 
+A choice or a score question needs a target, because "the answer is confident" says nothing about which
+answer won. A missing target raises before any call is made.
+
+```ruby
+team = Judge.choice("Which team?", %w[billing technical sales])
+Ticket.judge_filter(team, option: "billing", limit: 100)          # P(billing) >= threshold
+Ticket.judge_sort(team, option: "billing", limit: 100)            # ranked by P(billing)
+
+mood = Judge.score("How frustrated?", ["Calm", "Frustrated", "Very angry"])
+Ticket.judge_filter(mood, at_least: "Frustrated", limit: 100)
+```
+
+Rows sharing the same text are asked once.
+
 One row per request is not an accident, it is the only shape that keeps the judgment intact: Jev
 scores each question against the whole state, so putting several records in one request makes every
 answer a judgment about a mostly irrelevant document. Measured on 250 tickets, packing subjects cost
@@ -282,6 +326,11 @@ Judge.configure { |c| c.concurrency = 16 }   # or set the default once
 Measured against the live API on 100 records: 6.9x faster at the default of 8 threads, 18.4x at 32,
 with input tokens identical to the unit at every level.
 
+TypeSafe documents a limit of 1,200 requests per minute and says it can change without notice. The
+default of 8 threads runs at about 29 requests a second, above that limit. On 2026-09-23 one key
+sustained 1,758 requests a minute at 8 threads and 6,696 at 32 without a single 429, but nothing
+promises that tomorrow. A 429 is retried twice, honouring `Retry-After` up to `max_retry_wait`.
+
 ## Validations
 
 An ordinary ActiveModel validation that happens to ask a model.
@@ -296,11 +345,18 @@ end
 ticket.valid?
 ticket.errors.full_messages            # => ["Body matched \"contains a phone number or email address\""]
 ticket.judge_validation_results          # the judgment behind each verdict, never persisted
+ticket.errors.of_kind?(:body, :judge_refuted)   # also :judge_unmatched, and :judge_unavailable on :fail
 ```
 
+The messages are I18n keys under `errors.messages` (`judge_refuted`, `judge_unmatched`,
+`judge_unavailable`), with the instruction as `%{instruction}`. `strict:`, `on:`, `except_on:`, `if:` and
+`unless:` behave as they do on any Rails validation.
+
 Several judge validations on the same attribute travel in one call. A blank attribute costs nothing.
-A record remembers each judgment by its text, so saving it again without changing the text costs
-nothing either. `reload` forgets them.
+A record remembers the judgment of its current text, so saving it again without changing the text costs
+nothing. The memory is per Ruby object: a record freshly loaded from the database pays one call per judge
+validation on its first save. `if: :will_save_change_to_body?` avoids that when the text is all you check.
+`reload` forgets it. A skipped `on_error: :pass` check is logged at warn level.
 
 It works on a plain `ActiveModel::Model` form object too, one call per validation.
 
@@ -313,7 +369,7 @@ exactly what it exists to catch. Use `on_error: :fail` there.
 ```ruby
 class AddJudgeToTickets < ActiveRecord::Migration[8.0]
   def change
-    judge_attribute :tickets, :urgency, :noul      # float + urgency_judge + indexes
+    judge_attribute :tickets, :urgency, :noul      # float + urgency_judge + an index on urgency
     judge_attribute :tickets, :intent, :choice     # string + intent_judge
     judge_attribute :tickets, :frustration, :score # float + frustration_judge
   end
@@ -322,17 +378,30 @@ end
 create_table :tickets do |t|
   t.judge_attribute :urgency, :noul
 end
+
+change_table :tickets do |t|
+  t.judge_attribute :intent, :choice
+end
 ```
 
 Built from `add_column` and `add_index`, so it is reversible inside `change`. The sidecar is `jsonb` with
-a GIN index on PostgreSQL and `json` elsewhere, chosen from the connection actually running the migration.
+no index on PostgreSQL and `json` elsewhere, chosen from the connection actually running the migration.
+Nothing in the gem queries inside the sidecar, so an index there would only slow every write. The value
+column always allows NULL: it is empty until judged, so `null: false` raises.
 CI runs the suite on SQLite and MySQL, and the demo runs on PostgreSQL. MySQL rejects a default on a
 JSON column, so there the sidecar is nullable with no default, and a nil sidecar reads as `{}`.
 
 ```sh
 bin/rails generate judge:install
 bin/rails generate judge:attribute Ticket urgency:noul intent:choice frustration:score
+bin/rails generate judge:attribute Ticket spam:noul --database=secondary   # multi-database apps
 ```
+
+The attribute generator writes live declarations with TODO questions, so replace the wording before the
+first save: each save is judged, and billed, with whatever the question says. When the model has no
+`judge_source`, it writes one from the table's text columns, or an empty one that judges nothing until
+you fill it in. Later runs add their declarations below it, and `bin/rails destroy judge:attribute`
+removes them.
 
 ## What it costs
 
@@ -341,13 +410,15 @@ A judged record is a billed network call. The gem's job is to make that number p
 | | |
 |---|---|
 | Per record, however many questions | **one** call. `judge_source` groups every attribute sharing a text |
-| A save that changes nothing relevant | **zero** calls. Digests are compared first |
+| A save that changes nothing relevant | **zero** calls from `judge_attribute`: digests are compared first. A judge validation pays once per freshly loaded record |
 | Any query over judged columns | **zero** calls. They are ordinary indexed columns |
 | `judge_filter` / `judge_map` / `judge_sort` | **one call per row**, which is why `limit:` is mandatory |
 | A request, before it carries anything | ~326 input tokens of fixed overhead |
 | Each additional question in a request | ~24 input tokens |
+| The demo's three questions, structured criteria, on a ~200-character ticket | ~825 input tokens, about 0.00003 USD |
 
-Measured on 2026-09-21 against the live model; `BENCHMARK.md` carries the method. Those last two
+Measured on 2026-09-21 and 2026-09-23 against the live model, at TypeSafe's published 0.042 USD per
+million input tokens, output free; `BENCHMARK.md` carries the method. Those last two
 lines are the whole argument for `judge_source`: three separate calls pay the overhead three times and
 answer exactly the same thing.
 
@@ -387,7 +458,7 @@ The event carries sizes and counts. It never carries the state or the key.
 
 ```ruby
 Judge.configure do |config|
-  config.api_key      = ENV["JEV_API_KEY"]   # or TYPESAFE_API_KEY
+  config.api_key      = "..."                # read from JEV_API_KEY or TYPESAFE_API_KEY by default
   config.model        = "jev-latest"
   config.timeout      = 10.0
   config.open_timeout = 5.0
@@ -397,18 +468,21 @@ Judge.configure do |config|
 end
 ```
 
-`Net::HTTP`, one persistent connection per thread keyed on URL and timeouts, jittered exponential backoff
-on 429, 5xx and transport errors, `Retry-After` honoured up to `max_retry_wait`, no retry on any other 4xx.
-Nothing about the key or the payload is ever logged.
+`Net::HTTP`, one persistent connection per fiber keyed on URL and timeouts, never reused across a fork.
+Jittered exponential backoff on 429, 5xx and connection failures, `Retry-After` honoured on 429 and 503 up
+to `max_retry_wait`, no retry on any other 4xx. A read timeout is not re-sent, because the server may
+already have judged (and billed) the request. Nothing about the key or the payload is ever logged, and
+`inspect` on a configuration or a client hides the key.
 
 ```ruby
 Judge::Error
-├── Judge::ConfigurationError    # no usable key
+├── Judge::ConfigurationError    # no usable key, or async attributes without a way to enqueue
 ├── Judge::TransportError        # timeout, reset, DNS, TLS
-├── Judge::InvalidResponseError  # body was not what the API promises
+├── Judge::InvalidResponseError  # body or an answer was not what the API promises
 └── Judge::APIError              # carries #status and #body
     ├── Judge::AuthenticationError  # 401, 403
     ├── Judge::InvalidRequestError  # 400, 404, 422
+    ├── Judge::PayloadTooLargeError # 413
     ├── Judge::RateLimitError       # 429, carries #retry_after
     └── Judge::ServerError          # 5xx
 ```
@@ -442,10 +516,10 @@ class LayaAdapter
     answers = MyLayaService.judge(state, questions.transform_values(&:to_payload))
 
     results = questions.map do |name, question|
+      answer = answers.fetch(name)
       Judge::Result.from_values(name: name, question: question, type: question.type,
-                                value: answers.fetch(name).value,
-                                confidence: answers.fetch(name).confidence,
-                                probabilities: answers.fetch(name).distribution)
+                                value: answer.value, confidence: answer.confidence,
+                                probabilities: answer.distribution, legend: answer.legend)
     end
     Judge::ResultSet.new(results, model: "laya-1")
   end

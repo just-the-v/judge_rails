@@ -30,7 +30,7 @@ module Judge
     end
   end
 
-  class InvalidResponseError < Error; end
+  class PayloadTooLargeError < APIError; end
 
-  class PayloadTooLargeError < Error; end
+  class InvalidResponseError < Error; end
 end

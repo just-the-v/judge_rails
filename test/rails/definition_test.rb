@@ -89,10 +89,10 @@ class DefinitionTest < JudgeRailsTest
 
   def test_cast_per_question_type
     noul = define
-    choice = Judge::Rails::Definition.new(name: :intent, question: Judge.choice("what?", %w[a b]),
-                                          source: :body)
+    choice = Judge::Rails::Definition.new(name: :intent, source: :body,
+                                          question: Judge.choice("what?", %w[billing technical]))
     score = Judge::Rails::Definition.new(name: :frustration,
-                                         question: Judge.score("how?", %w[calm angry]), source: :body)
+                                         question: Judge.score("how?", %w[calm cross angry]), source: :body)
     set = adapter.call(state: "x", questions: { urgency: noul.question, intent: choice.question,
                                                 frustration: score.question })
 

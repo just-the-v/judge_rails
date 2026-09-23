@@ -49,8 +49,10 @@ end
 
 items = build_items(ROW_COUNT)
 question = Judge.noul("Does this message need a human to respond within the hour?",
-                      { true: "Money is stuck, a service is broken, or the customer is escalating",
-                        false: "A question, a request, or anything that can wait until tomorrow" })
+                      { true: { what: "Money is stuck, a service is broken, or the customer is escalating",
+                                examples: ["Our checkout has returned errors for the last hour"] },
+                        false: { what: "A question, a request, or anything that can wait until tomorrow",
+                                 examples: ["How do I export last month's invoices?"] } })
 
 state_chars = items.values.sum(&:length)
 warn "rows=#{ROW_COUNT} latency=#{LATENCY}s state_total=#{state_chars} chars"

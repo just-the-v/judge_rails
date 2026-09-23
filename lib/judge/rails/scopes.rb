@@ -5,18 +5,10 @@ module Judge
     module Scopes
       extend ActiveSupport::Concern
 
-      MODEL_SCOPES = %i[judge_computed judge_uncomputed].freeze
       DIRECTIONS = %i[asc desc].freeze
+      NUMERIC_LEVEL = /\A-?\d+\z/
 
       class_methods do
-        def judge_scopes!
-          return self unless judge_scopes_available?
-
-          judge_attributes.each { |definition| judge_define_scopes(definition) }
-          judge_define_model_scopes
-          self
-        end
-
         def judge_define_scopes(definition)
           column = definition.value_column
           name = definition.name
@@ -29,37 +21,21 @@ module Judge
           when "choice" then judge_define_choice_scopes(name, column, definition.question.options)
           when "score" then judge_define_score_scopes(name, column, definition.question.levels)
           end
-        end
-
-        def judge_scope_names
-          return [] unless judge_scopes_available?
-
-          judge_attributes.flat_map { |definition| judge_scope_names_for(definition) } + MODEL_SCOPES
+          judge_define_model_scopes
         end
 
         private
 
-        def judge_scopes_available?
-          singleton_class.method_defined?(:judge_attributes) && !judge_attributes.empty?
-        end
-
-        def judge_scope_names_for(definition)
-          name = definition.name
-          suffixes =
-            case definition.type
-            when "noul" then %w[above below between]
-            when "choice" then %w[is not]
-            when "score" then %w[at_least at_most level]
-            else []
-            end
-          suffixes.map { |s| :"#{name}_#{s}" } + [:"#{name}_unknown", :"order_by_#{name}"]
-        end
-
         def judge_define_noul_scopes(name, column)
-          judge_scope(:"#{name}_above") { |probability| all.where(arel_table[column].gteq(probability)) }
-          judge_scope(:"#{name}_below") { |probability| all.where(arel_table[column].lteq(probability)) }
+          judge_scope(:"#{name}_above") do |probability|
+            all.where(arel_table[column].gteq(judge_probability(probability, name)))
+          end
+          judge_scope(:"#{name}_below") do |probability|
+            all.where(arel_table[column].lteq(judge_probability(probability, name)))
+          end
           judge_scope(:"#{name}_between") do |low, high|
-            all.where(arel_table[column].gt(low)).where(arel_table[column].lt(high))
+            all.where(arel_table[column].gt(judge_probability(low, name)))
+               .where(arel_table[column].lt(judge_probability(high, name)))
           end
         end
 
@@ -94,9 +70,7 @@ module Judge
         end
 
         def judge_scope(name, &body)
-          return if singleton_class.method_defined?(name)
-
-          singleton_class.define_method(name, &body)
+          singleton_class.send(:define_method, name, &body)
         end
 
         def judge_value_columns
@@ -108,6 +82,12 @@ module Judge
           return direction if DIRECTIONS.include?(direction)
 
           raise ArgumentError, "order direction must be one of #{DIRECTIONS.inspect}, got #{dir.inspect}"
+        end
+
+        def judge_probability(value, name)
+          return value if value.is_a?(Numeric) && value.between?(0, 1)
+
+          raise ArgumentError, "#{name} scopes take a probability between 0 and 1, got #{value.inspect}"
         end
 
         def judge_options(values, options, name)
@@ -122,24 +102,12 @@ module Judge
         end
 
         def judge_level(level, levels, name)
-          by_index = level.is_a?(Integer) && !levels.all? { |label| label.match?(/\A-?\d+\z/) }
+          by_index = level.is_a?(Integer) && !levels.all? { |label| label.match?(NUMERIC_LEVEL) }
           index = by_index ? level : levels.index(level.to_s)
           return index if index&.between?(0, levels.size - 1)
 
           raise ArgumentError, "unknown #{name} level #{level.inspect}, expected one of #{levels.inspect} " \
                                "or 0..#{levels.size - 1}"
-        end
-
-        def method_missing(name, ...)
-          if judge_scope_names.include?(name)
-            judge_scopes!
-            return public_send(name, ...) if singleton_class.method_defined?(name)
-          end
-          super
-        end
-
-        def respond_to_missing?(name, include_private = false)
-          judge_scope_names.include?(name) || super
         end
       end
     end
