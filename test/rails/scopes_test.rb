@@ -376,6 +376,24 @@ class JudgeScopesTest < JudgeRailsTest
     assert_respond_to fresh, :judge_computed
   end
 
+  def test_a_hand_written_scope_keeps_its_name
+    custom = model do
+      scope :urgency_above, ->(_value) { where(channel: "custom") }
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :body
+    end
+    custom.create!(body: "x", channel: "custom", urgency: 0.1)
+
+    assert_equal 1, custom.urgency_above(0.9).count
+  end
+
+  def test_an_sti_subclass_gets_scopes_for_its_own_questions
+    base = model { judge_attribute :intent, Judge.choice("What?", %w[billing technical]), source: :body }
+    sub = Class.new(base) { judge_attribute :intent, Judge.choice("What?", %w[sales spam]), source: :body }
+
+    assert_raises(ArgumentError) { sub.intent_is("billing") }
+    assert sub.intent_is("sales")
+  end
+
   private
 
   def refund_client!

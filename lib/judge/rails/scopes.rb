@@ -70,6 +70,10 @@ module Judge
         end
 
         def judge_scope(name, &body)
+          generated = (@judge_generated_scopes ||= Set.new)
+          return if singleton_class.method_defined?(name, false) && !generated.include?(name)
+
+          generated << name
           singleton_class.send(:define_method, name, &body)
         end
 
