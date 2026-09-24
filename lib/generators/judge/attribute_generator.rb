@@ -54,8 +54,13 @@ module Judge
         return say_status(:identical, model_path, :blue) if declarations.empty?
 
         if judge_source?
-          inject_into_file model_path, declarations.join,
-                           after: /\A#{Regexp.escape(model_source[0...insertion_point])}/
+          point = insertion_point
+          unless point
+            return say_status(:skip, "could not find class #{class_name} in #{model_path}; add:\n" \
+                                     "#{declarations.join}", :yellow)
+          end
+
+          inject_into_file model_path, declarations.join, after: /\A#{Regexp.escape(model_source[0...point])}/
         else
           inject_into_class model_path, class_name, "#{source_line}#{declarations.join}\n"
         end
@@ -92,11 +97,13 @@ module Judge
       def insertion_point
         lines = model_source.lines
         class_index = lines.index do |line|
-          line.match?(/^\s*class\s+#{Regexp.escape(class_name.demodulize)}\b/)
+          line.match?(/^\s*class\s+(?:[\w:]+::)?#{Regexp.escape(class_name.demodulize)}\b/)
         end
+        return unless class_index
+
         indent = lines[class_index][/\A\s*/]
-        closing = lines.rindex { |line| line.match?(/\A#{indent}end\b/) }
-        lines[0...closing].join.length
+        closing = ((class_index + 1)...lines.size).find { |i| lines[i].match?(/\A#{indent}end\b/) }
+        closing && lines[0...closing].join.length
       end
 
       def source_line
@@ -110,9 +117,7 @@ module Judge
         model = class_name.safe_constantize
         return [] unless model.respond_to?(:columns)
 
-        text = model.columns.select { |c| c.type == :text }.map(&:name)
-        text = model.columns.select { |c| c.type == :string }.map(&:name) if text.empty?
-        text - model.columns.map(&:name).grep(/_judge\z|_type\z/)
+        model.columns.select { |c| c.type == :text }.map(&:name).grep_v(/_judge\z/)
       rescue StandardError
         []
       end
@@ -125,6 +130,10 @@ module Judge
         pairs.each do |name, type|
           gsub_file model_path, "  #{declaration(name, type)}\n", "", force: true
         end
+        remaining = File.read(File.join(destination_root, model_path))
+        return if remaining.match?(/^\s*judge_attribute\b/)
+
+        gsub_file model_path, source_line, "", force: true
       end
 
       def declared?(name)

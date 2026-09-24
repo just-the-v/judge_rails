@@ -394,6 +394,33 @@ class JudgeScopesTest < JudgeRailsTest
     assert sub.intent_is("sales")
   end
 
+  module HandWrittenScopes
+    extend ActiveSupport::Concern
+
+    class_methods do
+      def urgency_above(_value) = where(channel: "concern")
+    end
+  end
+
+  def test_a_scope_from_a_concern_keeps_its_name
+    custom = model do
+      include HandWrittenScopes
+
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :body
+    end
+    custom.create!(body: "x", channel: "concern", urgency: 0.1)
+
+    assert_equal 1, custom.urgency_above(0.9).count
+  end
+
+  def test_a_parent_scope_survives_an_attribute_declared_on_the_child
+    parent = model { scope :urgency_above, ->(_value) { where(channel: "parent") } }
+    child = Class.new(parent) { judge_attribute :urgency, Judge.noul("urgent?"), source: :body }
+    child.create!(body: "x", channel: "parent", urgency: 0.1)
+
+    assert_equal 1, child.urgency_above(0.9).count
+  end
+
   private
 
   def refund_client!

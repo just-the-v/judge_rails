@@ -94,7 +94,8 @@ Judge.noul("Does this need a human within the hour?", {
 Worth doing wherever two options can be confused. On the demo's 250 tickets this raised agreement with
 reference labels by about four points on both questions, for about 290 more input tokens per ticket,
 which is a thousandth of a cent. The demo now declares its questions this way. The labels come from
-two model annotators, not from people. `BENCHMARK.md`, arm 8, has the numbers and their limits.
+two model annotators, not from people. `BENCHMARK.md` (in French), arm 8, has the numbers and their
+limits.
 
 A question fingerprints itself, which is what makes invalidation automatic later.
 
@@ -204,8 +205,14 @@ ticket.judge_refresh!                        # or recompute and store the judgme
 ticket.judge_refresh(:urgency, force: true)  # or one attribute, even if it is fresh
 ```
 
-`judge_refresh!` writes only the judgment columns, with `update_columns`: no validations, no save
-callbacks, and `updated_at` does not move. Other unsaved edits on the record stay unsaved. To react to a
+`judge_refresh!` writes only the judgment columns and `updated_at`, with `update_columns`: no
+validations and no save callbacks, so a refresh cannot trigger another one, and fragment caches keyed
+on the record's version see the new judgment. Other unsaved edits on the record stay unsaved. If the
+row was deleted meanwhile, it raises `ActiveRecord::RecordNotFound`.
+
+On a record that was never saved, `judge_refresh!` creates it. If one of its requests fails, the row is
+still created from the answers already paid for, without asking again, and then the error is raised.
+Reload before retrying, or the retry creates a second row. To react to a
 new judgment, for a broadcast say, use `after_judge_refresh`:
 
 ```ruby
@@ -227,8 +234,9 @@ Blank source text has nothing to judge, and no call is made for it. An automatic
 value and sidecar on save. A `callbacks: false` one shows as stale until `judge_refresh` clears it.
 
 A source should depend only on content. One that reads `updated_at` or a column a callback rewrites
-makes every ordinary save look like new text. The gem's own refresh never saves the record, so it cannot
-feed a loop, but each of your saves will enqueue one more judgment.
+makes every ordinary save look like new text, and shows as stale right after its own refresh. The
+refresh runs no callbacks, so it cannot feed a loop, but each of your saves will enqueue one more
+judgment.
 
 ## When it runs
 
@@ -349,7 +357,8 @@ ticket.errors.of_kind?(:body, :judge_refuted)   # also :judge_unmatched, and :ju
 ```
 
 The messages are I18n keys under `errors.messages` (`judge_refuted`, `judge_unmatched`,
-`judge_unavailable`), with the instruction as `%{instruction}`. `strict:`, `on:`, `except_on:`, `if:` and
+`judge_unavailable`), with the instruction as `%{instruction}`. A locale without them falls back to the
+English text rather than "Translation missing". `strict:`, `on:`, `except_on:`, `if:` and
 `unless:` behave as they do on any Rails validation.
 
 Several judge validations on the same attribute travel in one call. A blank attribute costs nothing.
@@ -399,8 +408,9 @@ bin/rails generate judge:attribute Ticket spam:noul --database=secondary   # mul
 
 The attribute generator writes live declarations with TODO questions, so replace the wording before the
 first save: each save is judged, and billed, with whatever the question says. When the model has no
-`judge_source`, it writes one from the table's text columns, or an empty one that judges nothing until
-you fill it in. Later runs add their declarations below it, and `bin/rails destroy judge:attribute`
+`judge_source`, it writes one from the table's `text` columns only, never its string columns, so a
+`User` table does not send `encrypted_password` anywhere. With no `text` column it writes an empty one
+that judges nothing until you fill it in. Later runs add their declarations below it, and `bin/rails destroy judge:attribute`
 removes them.
 
 ## What it costs

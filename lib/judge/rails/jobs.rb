@@ -92,6 +92,7 @@ module Judge
 
           @judge_commit_callback = true
           after_commit :judge_enqueue_refresh, on: %i[create update]
+          after_rollback :judge_forget_flagged
         end
       end
 
@@ -107,9 +108,20 @@ module Judge
         automatic = self.class.judge_attributes.select { |d| d.sync? || d.enqueue? }
         pending, blank = Storage.plan(self, automatic)
         blank.each { |definition| Storage.clear(self, definition) }
+        judge_flag_async(pending.keys.select(&:enqueue?))
+        return if @judge_skip_inline
+
         Storage.groups(pending.select { |definition, _| definition.sync? }).each do |(state, model), group|
           compute_group_inline(state, model, group)
         end
+      end
+
+      def judge_flag_async(definitions)
+        (@judge_flagged_async ||= Set.new).merge(definitions.map(&:name))
+      end
+
+      def judge_forget_flagged
+        @judge_flagged_async = nil
       end
 
       def compute_group_inline(state, model, group)
@@ -131,7 +143,12 @@ module Judge
       end
 
       def judge_enqueue_refresh
-        pending = Storage.stale_definitions(self, self.class.judge_attributes.select(&:enqueue?))
+        flagged = @judge_flagged_async
+        judge_forget_flagged
+        return if flagged.nil? || flagged.empty?
+
+        definitions = flagged.map { |name| self.class.judge_definition(name) }
+        pending = Storage.stale_definitions(self, definitions)
         Jobs.enqueue_record(self, pending.map(&:name)) if pending.any?
       end
     end

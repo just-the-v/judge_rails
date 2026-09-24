@@ -58,7 +58,8 @@ purpose: the surface is expected to move, and nothing here has a second user yet
 - `required_ruby_version` is `>= 3.2.0`, which is what CI actually tests. It claimed 3.1 and never
   ran it.
 - `judge_refresh!` and `judge_refresh_all` store judgments with `update_columns`. Validations and save
-  callbacks no longer run, `updated_at` does not move, and other unsaved edits stay unsaved. A refresh
+  callbacks no longer run, `updated_at` moves in the same statement so view caches see the change, and
+  other unsaved edits stay unsaved. A row deleted meanwhile raises `ActiveRecord::RecordNotFound`. A refresh
   no longer re-bills judge validations, and a row that fails validation still gets its judgment.
 - `judge_filter` and `judge_sort` with a choice or score question raise without a target, before any
   call. They used to keep any row whose winning option was confident, whatever it was.
@@ -109,7 +110,18 @@ purpose: the surface is expected to move, and nothing here has a second user yet
 - An error body that is JSON but not an object (`null`, `[]`, `502`) maps to the right `APIError`, and a
   413 is `PayloadTooLargeError`.
 - `judge_refresh_all` judges each STI row with its own class's attributes.
-- A refresh that fails part way stores the judgments it already paid for.
+- A refresh that fails part way stores the judgments it already paid for, never asks again for the
+  one that failed, and always raises the original error, even when storing fails too. A record never
+  saved is created from what was computed.
+- An adapter factory may resolve another adapter without deadlocking.
+- A hand-written scope keeps its name whether it comes from the model, a concern or a parent class.
+- The generator never builds `judge_source` from string columns, so it cannot send a password hash or a
+  reset token; it lands in the right class of a file holding two, handles namespaced models, and
+  `destroy` removes the `judge_source` it added.
+- Validation messages fall back to English in a locale that lacks them.
+- A pool worker returns database connections from every pool, not only the primary one.
+- A save that changes nothing relevant evaluates no async source after commit.
+- `BENCHMARK.md`, which the README cites, ships with the gem.
 - Saving a record loaded with a partial `select` skips the judgments it cannot read.
 - A skipped judge validation no longer reads its attribute, `dup` gets its own judgment cache, and a
   frozen form object can be validated.

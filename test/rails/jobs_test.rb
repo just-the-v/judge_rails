@@ -205,7 +205,7 @@ class JudgeJobsTest < JudgeRailsTest
 
     assert_empty enqueued
     assert_equal 1, adapter.call_count
-    refute_predicate record.reload, :judge_stale?
+    assert_predicate record.reload, :judge_stale?
   end
 
   def test_a_refresh_stores_judgments_without_saving_other_edits
@@ -350,6 +350,22 @@ class JudgeJobsTest < JudgeRailsTest
 
   def test_the_enqueuer_refuses_something_that_cannot_be_called
     assert_raises(ArgumentError) { Judge::Rails::Jobs.enqueuer = nil }
+  end
+
+  def test_an_irrelevant_save_evaluates_no_async_source_after_commit
+    reads = 0
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: -> { reads += 1 and body }
+    end
+    record = klass.create!(body: "down")
+    run_payload(enqueued.shift)
+    record.reload
+    reads = 0
+
+    record.update!(channel: "web")
+
+    assert_equal 1, reads
+    assert_empty enqueued
   end
 
   private

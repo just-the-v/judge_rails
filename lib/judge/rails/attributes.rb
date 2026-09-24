@@ -92,9 +92,12 @@ module Judge
       def judge_refresh!(*names, force: false, adapter: nil, &)
         done = []
         Storage.compute(self, judge_definitions_for(names), force: force, adapter: adapter, done: done, &)
+      rescue StandardError
+        judge_persist_after_failure(done) if done.any?
+        raise
+      else
+        judge_persist_judgments(done, adapter: adapter) if done.any?
         done.map(&:name)
-      ensure
-        judge_persist_judgments(done, adapter: adapter) if done&.any?
       end
 
       def judge_decide(name, above:, below: nil)
@@ -118,18 +121,40 @@ module Judge
         names.map { |n| self.class.judge_definition(n) }
       end
 
-      def judge_persist_judgments(definitions, adapter: nil)
-        return judge_create_with_judgments(adapter) if new_record?
+      def judge_persist_judgments(definitions, adapter: nil, inline: true)
+        return judge_create_with_judgments(adapter, inline) if new_record?
 
-        columns = definitions.flat_map { |d| [d.value_column, d.sidecar_column] }
-        run_callbacks(:judge_refresh) { update_columns(columns.to_h { |c| [c, read_attribute(c)] }) }
+        run_callbacks(:judge_refresh) do
+          next if update_columns(judge_columns_to_store(definitions))
+
+          raise ActiveRecord::RecordNotFound.new(
+            "#{self.class} #{id.inspect} no longer exists, so its new judgments were not stored",
+            self.class.name, self.class.primary_key, id
+          )
+        end
       end
 
-      def judge_create_with_judgments(adapter)
+      def judge_persist_after_failure(definitions)
+        judge_persist_judgments(definitions, inline: false)
+      rescue StandardError => e
+        Judge::Rails.log_failure(self.class, e)
+      end
+
+      def judge_columns_to_store(definitions)
+        columns = definitions.flat_map { |d| [d.value_column, d.sidecar_column] }
+                             .to_h { |c| [c, read_attribute(c)] }
+        now = current_time_from_proper_timezone
+        self.class.timestamp_attributes_for_update_in_model.each { |column| columns[column.to_sym] = now }
+        columns
+      end
+
+      def judge_create_with_judgments(adapter, inline)
         @judge_refresh_adapter = adapter
+        @judge_skip_inline = !inline
         run_callbacks(:judge_refresh) { save! }
       ensure
         @judge_refresh_adapter = nil
+        @judge_skip_inline = nil
       end
     end
   end

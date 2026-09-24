@@ -87,6 +87,63 @@ class AttributeGeneratorTest < Minitest::Test
     end
   end
 
+  def test_a_model_without_text_columns_gets_an_empty_source
+    Dir.mktmpdir do |root|
+      write_model(root, "class Account < ActiveRecord::Base\nend\n")
+      ActiveRecord::Schema.define do
+        create_table(:accounts, force: true) do |t|
+          t.string :email, :encrypted_password, :reset_password_token
+        end
+      end
+      Object.const_set(:Account, Class.new(ActiveRecord::Base) { self.table_name = "accounts" })
+      generate(root, %w[Account urgency:noul])
+
+      model = File.read(File.join(root, "app/models/account.rb"))
+
+      assert_includes model, "judge_source { [] }"
+      refute_includes model, "encrypted_password"
+    ensure
+      Object.send(:remove_const, :Account) if Object.const_defined?(:Account)
+    end
+  end
+
+  def test_declarations_land_in_the_named_class_of_a_file_with_two
+    Dir.mktmpdir do |root|
+      write_model(root, "class Ticket < ApplicationRecord\n  judge_source { [body] }\nend\n\n" \
+                        "class TicketArchive < Ticket\nend\n")
+      generate(root, %w[Ticket urgency:noul])
+
+      model = File.read(File.join(root, "app/models/ticket.rb"))
+
+      assert_operator model.index("judge_attribute :urgency"), :<, model.index("class TicketArchive")
+    end
+  end
+
+  def test_a_namespaced_model_with_a_source_does_not_crash
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, "app/models/support"))
+      File.write(File.join(root, "app/models/support/ticket.rb"),
+                 "class Support::Ticket < ApplicationRecord\n  judge_source { [body] }\nend\n")
+      generate(root, %w[Support::Ticket urgency:noul])
+
+      assert_includes File.read(File.join(root, "app/models/support/ticket.rb")), "judge_attribute :urgency"
+    end
+  end
+
+  def test_destroy_also_removes_the_generated_source
+    Dir.mktmpdir do |root|
+      write_model(root, "class Ticket < ApplicationRecord\nend\n")
+      generate(root, %w[Ticket urgency:noul])
+      capture_io do
+        Judge::Generators::AttributeGenerator.start(%w[Ticket urgency:noul], destination_root: root,
+                                                                             behavior: :revoke)
+      end
+
+      assert_equal "class Ticket < ApplicationRecord\n\nend\n",
+                   File.read(File.join(root, "app/models/ticket.rb"))
+    end
+  end
+
   private
 
   def write_model(root, source)

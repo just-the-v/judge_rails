@@ -174,4 +174,15 @@ class AdapterTest < Minitest::Test
 
     assert_raises(Judge::InvalidResponseError) { Judge.ask("is it urgent?", text: "x") }
   end
+
+  def test_a_factory_may_resolve_another_adapter
+    inner = FakeProvider.new
+    Judge::Adapter.register(:inner) { inner }
+    Judge::Adapter.register(:outer) { Judge::Adapter.resolve(:inner) }
+    Judge.configure { |c| c.adapter = :outer }
+
+    Judge.ask("is it urgent?", text: "x")
+
+    assert_equal 1, inner.seen.size
+  end
 end

@@ -383,4 +383,69 @@ class AttributesTest < JudgeRailsTest
 
     assert_raises(ActiveModel::MissingAttributeError) { klass.new(body: "x").judge_refresh }
   end
+
+  def test_a_new_record_that_fails_part_way_is_created_without_asking_again
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :subject, sync: true
+      judge_attribute :intent, Judge.choice("What is it?", %w[billing technical]), source: :body, sync: true
+    end
+    failing = JudgeTestSupport::RecordingClient.new do |_question, _name, state|
+      raise Judge::RateLimitError, "429" if state == "body"
+    end
+    record = klass.new(subject: "subject", body: "body")
+
+    assert_raises(Judge::RateLimitError) { record.judge_refresh!(adapter: failing) }
+    assert_equal 2, failing.call_count
+    assert_predicate record, :persisted?
+    assert_in_delta 0.91, klass.find(record.id).urgency
+  end
+
+  def test_a_failing_store_never_hides_the_api_error
+    klass = model do
+      judge_attribute :urgency, Judge.noul("urgent?"), source: :subject, callbacks: false
+      judge_attribute :intent, Judge.choice("What is it?", %w[billing technical]), source: :body,
+                                                                                   callbacks: false
+    end
+    record = klass.create!(subject: "subject", body: "body")
+    record.readonly!
+    failing = JudgeTestSupport::RecordingClient.new do |_question, _name, state|
+      raise Judge::ServerError, "503" if state == "body"
+    end
+
+    assert_raises(Judge::ServerError) { record.judge_refresh!(adapter: failing) }
+  end
+
+  def test_a_refresh_of_a_deleted_row_raises
+    klass = model { judge_attribute :urgency, Judge.noul("urgent?"), source: :body, callbacks: false }
+    record = klass.create!(body: "down")
+    klass.where(id: record.id).delete_all
+
+    assert_raises(ActiveRecord::RecordNotFound) { record.judge_refresh! }
+  end
+
+  def test_a_stored_refresh_moves_updated_at
+    klass = model { judge_attribute :urgency, Judge.noul("urgent?"), source: :body, callbacks: false }
+    record = klass.create!(body: "down")
+    record.update_columns(updated_at: Time.utc(2020, 1, 1))
+
+    record.judge_refresh!
+
+    assert_operator klass.find(record.id).updated_at, :>, Time.utc(2020, 1, 1)
+  end
+
+  class SecondaryRecord < ActiveRecord::Base
+    self.abstract_class = true
+  end
+
+  def test_workers_return_connections_from_every_pool
+    SecondaryRecord.establish_connection(adapter: "sqlite3", database: ":memory:")
+    Judge::Pool.map([1, 2, 3], concurrency: 3) do
+      SecondaryRecord.connection.execute("select 1")
+      sleep 0.02
+    end
+
+    assert_equal 0, SecondaryRecord.connection_pool.stat[:dead]
+  ensure
+    SecondaryRecord.remove_connection
+  end
 end

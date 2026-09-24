@@ -33,8 +33,12 @@ module Judge
       def resolve(name)
         return name if name.respond_to?(:call)
 
+        built = @built
+        return built.last if built&.first == name
+
+        adapter = build(name)
         @lock.synchronize do
-          @built = [name, build(name)] unless @built&.first == name
+          @built = [name, adapter] unless @built&.first == name
           @built.last
         end
       end

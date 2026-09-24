@@ -70,11 +70,16 @@ module Judge
         end
 
         def judge_scope(name, &body)
-          generated = (@judge_generated_scopes ||= Set.new)
-          return if singleton_class.method_defined?(name, false) && !generated.include?(name)
+          return if singleton_class.method_defined?(name) && !judge_generated_scope?(name)
 
-          generated << name
+          (@judge_generated_scopes ||= Set.new) << name
           singleton_class.send(:define_method, name, &body)
+        end
+
+        def judge_generated_scope?(name)
+          ancestors.grep(Class).any? do |klass|
+            klass.instance_variable_get(:@judge_generated_scopes)&.include?(name)
+          end
         end
 
         def judge_value_columns

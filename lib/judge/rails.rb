@@ -17,6 +17,7 @@ require "judge/rails/validator"
 module Judge
   module Rails
     CONCERNS = [Attributes, Refresh, Jobs, Scopes, Validator].freeze
+    LEASE_REGISTRY_LOCK = Mutex.new
 
     def self.logger
       Judge.config.logger || ActiveRecord::Base.logger
@@ -29,8 +30,11 @@ module Judge
 end
 
 Judge::Pool.on_worker_exit do
-  pool = ActiveRecord::Base.connection_handler.retrieve_connection_pool(ActiveRecord::Base.connection_specification_name)
-  pool.release_connection if pool&.active_connection?
+  Judge::Rails::LEASE_REGISTRY_LOCK.synchronize do
+    ActiveRecord::Base.connection_handler.connection_pool_list(:all).each do |pool|
+      pool.release_connection if pool.active_connection?
+    end
+  end
 end
 
 ActiveSupport.on_load(:active_record) do

@@ -209,9 +209,17 @@ class JudgeValidator < ActiveModel::EachValidator # rubocop:disable Style/OneCla
 
   def add_error(record, attribute, type, message)
     details = { instruction: instruction }
+    message ||= english_fallback(type)
     details[:message] = message if message
     details[:strict] = options[:strict] if options[:strict]
     record.errors.add(attribute, type, **details)
+  end
+
+  def english_fallback(type)
+    key = :"errors.messages.#{type}"
+    return if I18n.exists?(key)
+
+    I18n.t(key, locale: :en, instruction: instruction)
   end
 
   def context_match?(record)

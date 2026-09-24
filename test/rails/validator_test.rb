@@ -373,4 +373,20 @@ class ValidatorTest < JudgeRailsTest
 
     assert_predicate SpamForm.new(body: "hello").freeze, :valid?
   end
+
+  def test_an_untranslated_locale_falls_back_to_english
+    use_client(scripted_client({ "is spam" => 0.97 }))
+    record = model { validates :body, judge: { refute: "is spam" } }.new(body: "buy watches")
+    I18n.available_locales = %i[en fr]
+
+    messages = I18n.with_locale(:fr) do
+      record.valid?
+      record.errors.full_messages
+    end
+
+    assert_includes messages.first, 'matched "is spam"'
+    refute_includes messages.first, "Translation missing"
+  ensure
+    I18n.available_locales = nil
+  end
 end
