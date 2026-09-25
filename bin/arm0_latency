@@ -70,7 +70,7 @@ end
 baseline = rows.first
 
 puts
-puts "| N questions | Latence médiane | Écart | Tokens d'entrée | Tokens / question | vs N=1 |"
+puts "| N questions | Median latency | Spread | Input tokens | Tokens / question | vs N=1 |"
 puts "|---|---|---|---|---|---|"
 rows.each do |row|
   puts format("| %<count>d | %<median>.3f s | %<spread>.3f s | %<input>d | %<per>.0f | %<ratio>.2fx |",

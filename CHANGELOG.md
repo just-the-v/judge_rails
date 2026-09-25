@@ -1,9 +1,9 @@
 # Changelog
 
-## 0.0.1 (unreleased)
+## 0.0.1 (2026-09-25)
 
-The first version under this name, not published yet. It will ship as 0.0.1 rather than 1.0.0 on
-purpose: the surface is expected to move, and nothing here has a second user yet.
+The first version under this name. It ships as 0.0.1 rather than 1.0.0 on purpose: the surface is
+expected to move, and nothing here has a second user yet.
 
 ### Added
 

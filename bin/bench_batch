@@ -78,7 +78,7 @@ server.stop
 
 baseline = rows.first
 puts
-puts "| Configuration | Requêtes | Temps mur | Octets envoyés | vs séquentiel 1 thread |"
+puts "| Configuration | Requests | Wall time | Bytes sent | vs sequential 1 thread |"
 puts "|---|---|---|---|---|"
 rows.each do |row|
   speedup = row[:seconds].zero? ? "-" : format("%.1fx", baseline[:seconds] / row[:seconds])

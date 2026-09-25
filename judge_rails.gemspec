@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.description = "A composable Ruby client for TypeSafe's Jev model, plus an ActiveRecord " \
                      "layer that turns natural-language judgments into ordinary, indexable, " \
                      "self-maintaining model attributes."
-  spec.homepage = "https://github.com/beeleethebee/judge_rails"
+  spec.homepage = "https://github.com/just-the-v/judge_rails"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
 
