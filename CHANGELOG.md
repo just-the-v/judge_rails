@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.2 (2026-09-26)
+
+No change to the gem itself. The first release published by `release.yml` through RubyGems trusted
+publishing; 0.0.1 was pushed by hand.
+
+### Changed
+
+- Development only: minitest `~> 6.0` in the root `Gemfile` and the three `gemfiles/`, and
+  `actions/checkout@v7` in CI and release.
+
 ## 0.0.1 (2026-09-25)
 
 The first version under this name. It ships as 0.0.1 rather than 1.0.0 on purpose: the surface is
