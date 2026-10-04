@@ -18,6 +18,7 @@ module Judge
   extend Facade
 
   autoload :Client, "judge/client"
+  autoload :Clef, "judge/clef"
 
   @config_lock = Mutex.new
 

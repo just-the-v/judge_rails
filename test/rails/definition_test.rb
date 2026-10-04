@@ -80,6 +80,20 @@ class DefinitionTest < JudgeRailsTest
     assert d.stale?(value: 0.9, sidecar: fresh.merge("digest" => "other"), state: "x")
   end
 
+  def test_switching_to_clef_makes_jev_judgments_stale
+    Judge.reset_config!
+    Judge.adapter = adapter
+    d = define
+    jev = { "digest" => d.digest, "state_digest" => d.state_digest("x") }
+    Judge.config.adapter = :clef
+
+    assert_equal "clef", d.effective_model
+    assert d.stale?(value: 0.9, sidecar: jev, state: "x")
+  ensure
+    Judge.reset_config!
+    Judge.adapter = adapter
+  end
+
   def test_stale_when_the_source_text_changed
     d = define
     sidecar = { "digest" => d.digest, "state_digest" => d.state_digest("x") }

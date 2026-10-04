@@ -173,4 +173,19 @@ class FakeJevTest < Minitest::Test
     assert_equal before, Thread.list.size
     assert_raises(Errno::ECONNREFUSED) { post(server: server) }
   end
+
+  def test_the_cloudflare_envelope_wraps_answers_and_errors
+    server = FakeJev.start(envelope: :cloudflare)
+    body = JSON.parse(post(server: server).body)
+
+    assert body["success"]
+    assert_equal %w[urgent topic anger], body.dig("result", "answers").keys
+
+    failed = JSON.parse(post(token: nil, server: server).body)
+
+    refute failed["success"]
+    assert_equal "missing or empty bearer token", failed.dig("errors", 0, "message")
+  ensure
+    server&.stop
+  end
 end

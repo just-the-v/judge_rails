@@ -7,6 +7,13 @@ Judge.configure do |config|
 
   config.logger = Rails.logger
 
+  # Cloudflare Clef instead of Jev: set JUDGE_ADAPTER=clef, CLOUDFLARE_API_TOKEN and
+  # CLOUDFLARE_ACCOUNT_ID, or:
+  #
+  # config.adapter               = :clef
+  # config.cloudflare_api_token  = Rails.application.credentials.dig(:cloudflare, :api_token)
+  # config.cloudflare_account_id = Rails.application.credentials.dig(:cloudflare, :account_id)
+
   # Defaults, uncomment to override:
   #
   # config.base_url     = "https://api.typesafe.ai/v1/systemone"

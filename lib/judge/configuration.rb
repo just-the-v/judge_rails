@@ -4,16 +4,19 @@ module Judge
   class Configuration
     DEFAULT_BASE_URL = "https://api.typesafe.ai/v1/systemone"
     DEFAULT_MODEL = "jev-latest"
+    CLEF_DEFAULT_MODEL = "clef"
 
-    attr_reader :api_key, :base_url, :model, :timeout, :open_timeout, :max_retries, :max_retry_wait,
-                :concurrency, :adapter
+    attr_reader :api_key, :base_url, :timeout, :open_timeout, :max_retries, :max_retry_wait,
+                :concurrency, :adapter, :cloudflare_api_token, :cloudflare_account_id
     attr_accessor :logger
 
     def initialize
       self.api_key = [ENV.fetch("JEV_API_KEY", nil), ENV.fetch("TYPESAFE_API_KEY", nil)]
                      .find { |value| !blank?(value) }
       self.base_url = present_env("JEV_BASE_URL") || DEFAULT_BASE_URL
-      self.model = present_env("JEV_MODEL") || DEFAULT_MODEL
+      @model = present_env("JEV_MODEL")
+      self.cloudflare_api_token = ENV.fetch("CLOUDFLARE_API_TOKEN", nil)
+      self.cloudflare_account_id = ENV.fetch("CLOUDFLARE_ACCOUNT_ID", nil)
       self.timeout = 10.0
       self.open_timeout = 5.0
       self.max_retries = 2
@@ -31,6 +34,18 @@ module Judge
       raise ArgumentError, "base_url must not be blank" if blank?(value)
 
       @base_url = value.to_s.strip
+    end
+
+    def cloudflare_api_token=(value)
+      @cloudflare_api_token = blank?(value) ? nil : value.to_s.strip
+    end
+
+    def cloudflare_account_id=(value)
+      @cloudflare_account_id = blank?(value) ? nil : value.to_s.strip
+    end
+
+    def model
+      @model || (@adapter == :clef ? CLEF_DEFAULT_MODEL : DEFAULT_MODEL)
     end
 
     def model=(value)
@@ -77,10 +92,25 @@ module Judge
       raise ConfigurationError, "No Judge API key. Set JEV_API_KEY or Judge.configure { |c| c.api_key = ... }"
     end
 
+    def cloudflare_api_token!
+      return @cloudflare_api_token if @cloudflare_api_token
+
+      raise ConfigurationError, "No Cloudflare API token. Set CLOUDFLARE_API_TOKEN or " \
+                                "Judge.configure { |c| c.cloudflare_api_token = ... }"
+    end
+
+    def cloudflare_account_id!
+      return @cloudflare_account_id if @cloudflare_account_id
+
+      raise ConfigurationError, "No Cloudflare account id. Set CLOUDFLARE_ACCOUNT_ID or " \
+                                "Judge.configure { |c| c.cloudflare_account_id = ... }"
+    end
+
     def inspect
       key = @api_key ? "[FILTERED]" : "nil"
-      "#<Judge::Configuration api_key=#{key} base_url=#{@base_url.inspect} model=#{@model.inspect} " \
-        "adapter=#{@adapter.inspect}>"
+      token = @cloudflare_api_token ? "[FILTERED]" : "nil"
+      "#<Judge::Configuration api_key=#{key} cloudflare_api_token=#{token} base_url=#{@base_url.inspect} " \
+        "model=#{model.inspect} adapter=#{@adapter.inspect}>"
     end
 
     private
