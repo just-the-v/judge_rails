@@ -21,7 +21,8 @@ module Judge
       normalized = normalize_questions(questions)
       raise ArgumentError, "ask needs at least one question" if normalized.empty?
 
-      results = (adapter || self.adapter).call(state: text, questions: normalized, model: model)
+      provider = adapter ? Adapter.build(adapter) : self.adapter
+      results = provider.call(state: text, questions: normalized, model: model)
       return results unless single
 
       name = normalized.keys.first

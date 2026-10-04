@@ -469,7 +469,7 @@ The event carries sizes and counts. It never carries the state or the key.
 ```ruby
 Judge.configure do |config|
   config.api_key      = "..."                # read from JEV_API_KEY or TYPESAFE_API_KEY by default
-  config.model        = "jev-latest"
+  config.model        = "jev-latest"         # "clef" when the adapter is :clef
   config.timeout      = 10.0
   config.open_timeout = 5.0
   config.max_retries  = 2
@@ -542,6 +542,45 @@ Judge.configure { |c| c.adapter = :laya }
 The default is `:jev` and stays `:jev` until you change it. `JUDGE_ADAPTER` picks one from the
 environment, and `adapter:` overrides it for a single call, which is how the test suite installs a
 recorder.
+
+### Cloudflare Clef
+
+`:clef` ships with the gem. It sends the same questions to [Clef](https://developers.cloudflare.com/workers-ai/models/clef/)
+on Cloudflare Workers AI and needs a Workers AI API token and your account id:
+
+```sh
+JUDGE_ADAPTER=clef
+CLOUDFLARE_API_TOKEN=...
+CLOUDFLARE_ACCOUNT_ID=...
+```
+
+```ruby
+Judge.configure do |config|
+  config.adapter               = :clef           # or JUDGE_ADAPTER=clef
+  config.cloudflare_api_token  = "..."           # read from CLOUDFLARE_API_TOKEN by default
+  config.cloudflare_account_id = "..."           # read from CLOUDFLARE_ACCOUNT_ID by default
+end
+
+Judge.ask(Judge.noul("Is this urgent?"), text: "Checkout is down for everyone").probability  # => 0.98
+```
+
+The model follows the adapter: `clef` under `:clef`, `jev-latest` otherwise. `clef-flash` is the smaller,
+faster one. Set it with `config.model`, `JEV_MODEL`, or a pin on one attribute:
+
+```ruby
+judge_attribute :urgency, Judge.noul("..."), model: "clef-flash"
+```
+
+Clef only serves those two names. Asking it for any other model raises `Judge::ConfigurationError` before
+a request leaves. `api_key` stays the Jev key, so one app can keep `:jev` and try Clef on a single call,
+naming the model since the configured one is still Jev's:
+
+```ruby
+Judge.ask(question, text: text, adapter: :clef, model: "clef")
+```
+
+Switching an attribute from Jev to Clef changes its model, so its stored judgments go stale and are
+recomputed on the next refresh, the same as changing a pin.
 
 ### You may not need an adapter at all
 

@@ -26,9 +26,11 @@ class FakeJev
 
   attr_reader :host, :port
 
-  def initialize(host: "127.0.0.1", model: "jev-1.13.0")
+  def initialize(host: "127.0.0.1", model: "jev-1.13.0", envelope: nil)
     @host = host
     @model = model
+    @envelope = envelope
+    @headers = []
     @mutex = Mutex.new
     @requests = []
     @answers = {}
@@ -113,6 +115,10 @@ class FakeJev
     @mutex.synchronize { @requests.last }
   end
 
+  def last_headers
+    @mutex.synchronize { @headers.last }
+  end
+
   def request_count
     @mutex.synchronize { @requests.size }
   end
@@ -120,6 +126,7 @@ class FakeJev
   def reset!
     @mutex.synchronize do
       @requests.clear
+      @headers.clear
       @answers.clear
       @scoped_answers.clear
       @failures.clear
@@ -192,12 +199,15 @@ class FakeJev
     payload = parse_body(request[:body])
     return error(400, "invalid_request_error", "malformed JSON body") unless payload
 
-    @mutex.synchronize { @requests << payload }
+    @mutex.synchronize do
+      @requests << payload
+      @headers << request[:headers].merge("path" => request[:path])
+    end
 
     failure = next_failure
     return failure_response(failure) if failure
 
-    [200, {}, JSON.generate(build_response(payload))]
+    [200, {}, JSON.generate(envelope(build_response(payload)))]
   end
 
   def authorized?(header)
@@ -220,10 +230,23 @@ class FakeJev
 
   def failure_response(failure)
     headers = failure.retry_after ? { "Retry-After" => failure.retry_after.to_s } : {}
-    body = failure.body || JSON.generate(
-      "error" => { "type" => error_type(failure.status), "message" => "injected failure" }
-    )
+    body = failure.body || JSON.generate(error_body(error_type(failure.status), "injected failure"))
     [failure.status, headers, body]
+  end
+
+  def envelope(response)
+    return response unless @envelope == :cloudflare
+
+    { "result" => response, "success" => true, "errors" => [], "messages" => [] }
+  end
+
+  def error_body(type, message)
+    if @envelope == :cloudflare
+      { "result" => nil, "success" => false, "errors" => [{ "code" => 5012, "message" => message }],
+        "messages" => [] }
+    else
+      { "error" => { "type" => type, "message" => message } }
+    end
   end
 
   def error_type(status)
@@ -236,7 +259,7 @@ class FakeJev
   end
 
   def error(status, type, message)
-    [status, {}, JSON.generate("error" => { "type" => type, "message" => message })]
+    [status, {}, JSON.generate(error_body(type, message))]
   end
 
   def build_response(payload)

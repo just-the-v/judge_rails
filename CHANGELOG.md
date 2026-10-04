@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.0.3 (2026-10-04)
+
+### Added
+
+- **Cloudflare Clef.** A built-in `:clef` adapter sends the same questions to Clef and Clef-flash on
+  Workers AI. It reuses the Jev client, so retries, pooling, errors and instrumentation behave the same.
+  `JUDGE_ADAPTER=clef` with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` is the whole setup.
+- `config.cloudflare_api_token` and `config.cloudflare_account_id`, read from those two variables and
+  kept apart from `api_key`, so Jev and Clef can live in one app. `inspect` hides the token.
+- `adapter:` on `Judge.ask` and the ActiveRecord helpers now also takes a registered name, such as
+  `adapter: :clef`, and not only an adapter object.
+
+### Changed
+
+- With no explicit `config.model` or `JEV_MODEL`, the model follows the adapter: `clef` under `:clef`,
+  `jev-latest` otherwise. Nothing changes for Jev users. Moving an attribute to Clef changes its model,
+  so its stored judgments go stale and are recomputed.
+
 ## 0.0.2 (2026-09-26)
 
 No change to the gem itself. The first release published by `release.yml` through RubyGems trusted

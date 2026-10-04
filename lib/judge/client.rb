@@ -44,13 +44,14 @@ module Judge
       raise ArgumentError, "state must not be nil" if state.nil?
       raise ArgumentError, "questions must not be empty" if questions.nil? || questions.empty?
 
+      model ||= @config.model
+      target = endpoint(model)
       payload = JSON.generate(build_payload(state, questions, model))
-      event = { model: model || @config.model, questions: questions.size,
-                request_bytes: payload.bytesize }
+      event = { model: model, questions: questions.size, request_bytes: payload.bytesize }
 
       instrument(event) do
         started = monotonic
-        body = perform(payload)
+        body = unwrap(perform(target, payload))
         set = ResultSet.from_response(body, questions: questions, latency: monotonic - started)
         event[:latency] = set.latency
         event[:input_tokens] = set.usage&.input_tokens
@@ -70,18 +71,33 @@ module Judge
     def build_payload(state, questions, model)
       {
         "state" => state,
-        "model" => model || @config.model,
+        "model" => model,
         "questions" => questions.to_h { |name, question| [name.to_s, question.to_payload] }
       }
     end
 
-    def perform(payload)
-      authorization = "Bearer #{@config.api_key!}"
+    def endpoint(_model)
+      url = @config.base_url
+      @uri = URI.parse(url) if @uri_source != url
+      @uri_source = url
+      @uri
+    end
+
+    def authorization
+      "Bearer #{@config.api_key!}"
+    end
+
+    def unwrap(body)
+      body
+    end
+
+    def perform(target, payload)
+      authorization = self.authorization
       attempt = 0
 
       loop do
         attempt += 1
-        response = attempt_request(authorization, payload, attempt)
+        response = attempt_request(target, authorization, payload, attempt)
         next if response.nil?
 
         status = response.code.to_i
@@ -100,14 +116,14 @@ module Judge
       after || backoff(attempt)
     end
 
-    def attempt_request(authorization, payload, attempt)
+    def attempt_request(target, authorization, payload, attempt)
       started = monotonic
-      response = execute(authorization, payload)
-      log(response.code, monotonic - started, attempt)
+      response = execute(target, authorization, payload)
+      log(target, response.code, monotonic - started, attempt)
       response
     rescue *TRANSPORT_ERRORS => e
-      close_connection
-      log(e.class.name, monotonic - started, attempt)
+      close_connection(target)
+      log(target, e.class.name, monotonic - started, attempt)
       if attempt > @config.max_retries || UNSAFE_TO_RESEND.any? { |klass| e.is_a?(klass) }
         raise TransportError, "#{e.class}: #{e.message}"
       end
@@ -116,39 +132,31 @@ module Judge
       nil
     end
 
-    def execute(authorization, payload)
-      request = Net::HTTP::Post.new(uri.request_uri)
+    def execute(target, authorization, payload)
+      request = Net::HTTP::Post.new(target.request_uri)
       request["Authorization"] = authorization
       request["Content-Type"] = "application/json"
       request["Accept"] = "application/json"
       request.body = payload
-      connection.request(request)
+      connection(target).request(request)
     end
 
-    def uri
-      url = @config.base_url
-      @uri = URI.parse(url) if @uri_source != url
-      @uri_source = url
-      @uri
+    def connection_key(target)
+      [target.to_s, @config.open_timeout, @config.timeout].freeze
     end
 
-    def connection_key
-      [@config.base_url, @config.open_timeout, @config.timeout].freeze
-    end
-
-    def connection
+    def connection(target)
       store = connections
-      key = connection_key
+      key = connection_key(target)
       http = store[key]
       return http if http&.started?
 
-      store[key] = start_connection(key.first)
+      store[key] = start_connection(target)
     end
 
-    def start_connection(base_url)
-      uri = URI.parse(base_url)
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = uri.scheme == "https"
+    def start_connection(target)
+      http = Net::HTTP.new(target.host, target.port)
+      http.use_ssl = target.scheme == "https"
       http.open_timeout = @config.open_timeout
       http.read_timeout = @config.timeout
       http.write_timeout = @config.timeout if http.respond_to?(:write_timeout=)
@@ -166,8 +174,8 @@ module Judge
       store[:connections]
     end
 
-    def close_connection
-      http = connections.delete(connection_key)
+    def close_connection(target)
+      http = connections.delete(connection_key(target))
       http.finish if http&.started?
     rescue IOError
       nil
@@ -235,12 +243,12 @@ module Judge
       body.length > limit ? "#{body[0, limit]}..." : body
     end
 
-    def log(status, latency, attempt)
+    def log(target, status, latency, attempt)
       logger = @config.logger
       return unless logger
 
       logger.debug do
-        "Judge POST #{uri.path} status=#{status} latency=#{latency.round(3)}s attempt=#{attempt}"
+        "Judge POST #{target.path} status=#{status} latency=#{latency.round(3)}s attempt=#{attempt}"
       end
     end
 

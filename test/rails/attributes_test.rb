@@ -309,7 +309,8 @@ class AttributesTest < JudgeRailsTest
 
     assert_predicate record, :judge_stale?
   ensure
-    Judge.config.model = Judge::Configuration::DEFAULT_MODEL
+    Judge.reset_config!
+    Judge.adapter = adapter
   end
 
   def test_saving_a_partially_selected_record_skips_judgments_it_cannot_read

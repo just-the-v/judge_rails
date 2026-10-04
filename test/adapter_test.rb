@@ -50,7 +50,7 @@ class AdapterTest < Minitest::Test
 
   def test_the_default_adapter_is_judge
     assert_equal :jev, Judge.config.adapter
-    assert_equal [:jev], Judge::Adapter.names
+    assert_equal %i[jev clef], Judge::Adapter.names
     assert_instance_of Judge::Client, Judge::Adapter.build(:jev)
   end
 
@@ -85,6 +85,12 @@ class AdapterTest < Minitest::Test
 
     assert_in_delta 0.99, Judge.ask(Judge.noul("urgent?"), text: "x", adapter: provider).value
     assert_equal(["x"], provider.seen.map { |call| call[:state] })
+  end
+
+  def test_an_adapter_named_per_call_is_looked_up
+    Judge::Adapter.register(:fake) { FakeProvider.new }
+
+    assert_in_delta 0.42, Judge.ask(Judge.noul("urgent?"), text: "x", adapter: :fake).probability
   end
 
   def test_an_unknown_adapter_says_what_is_known
