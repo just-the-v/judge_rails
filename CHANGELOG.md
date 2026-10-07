@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.4 (unreleased)
+## 0.0.4 (2026-10-07)
 
 ### Added
 
