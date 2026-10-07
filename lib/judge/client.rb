@@ -52,7 +52,7 @@ module Judge
       instrument(event) do
         started = monotonic
         body = unwrap(perform(target, payload))
-        set = ResultSet.from_response(body, questions: questions, latency: monotonic - started)
+        set = result_set(body, questions, monotonic - started)
         event[:latency] = set.latency
         event[:input_tokens] = set.usage&.input_tokens
         event[:output_tokens] = set.usage&.output_tokens
@@ -89,6 +89,10 @@ module Judge
 
     def unwrap(body)
       body
+    end
+
+    def result_set(body, questions, latency)
+      ResultSet.from_response(body, questions: questions, latency: latency)
     end
 
     def perform(target, payload)
