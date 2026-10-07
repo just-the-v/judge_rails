@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.4 (2026-10-07)
+
+### Added
+
+- **OpenAI decisions.** A built-in `:openai` adapter sends the same questions to OpenAI's Decisions API
+  (`gpt-6-luna`). It reuses the Jev client for retries, pooling, errors and instrumentation, translates
+  the questions to `predicate` / `choice` / `score`, and builds its answers with `Result.from_values`.
+  `JUDGE_ADAPTER=openai` with `OPENAI_API_KEY` is the whole setup.
+- `config.openai_api_key`, read from `OPENAI_API_KEY`. `inspect` hides it.
+- `Judge::RefusalError`, a `Judge::InvalidResponseError` raised when a provider declines to answer a
+  question. It carries `#question_name`.
+
+### Changed
+
+- Structured state and structured criteria reach OpenAI as JSON text, since its API takes neither.
+  Nothing changes for Jev or Clef.
+
 ## 0.0.3 (2026-10-04)
 
 ### Added

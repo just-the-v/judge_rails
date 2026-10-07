@@ -13,6 +13,11 @@ Judge.configure do |config|
   # config.adapter               = :clef
   # config.cloudflare_api_token  = Rails.application.credentials.dig(:cloudflare, :api_token)
   # config.cloudflare_account_id = Rails.application.credentials.dig(:cloudflare, :account_id)
+  #
+  # OpenAI decisions instead: set JUDGE_ADAPTER=openai and OPENAI_API_KEY, or:
+  #
+  # config.adapter        = :openai
+  # config.openai_api_key = Rails.application.credentials.dig(:openai, :api_key)
 
   # Defaults, uncomment to override:
   #

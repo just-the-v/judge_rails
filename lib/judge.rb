@@ -19,6 +19,7 @@ module Judge
 
   autoload :Client, "judge/client"
   autoload :Clef, "judge/clef"
+  autoload :OpenAI, "judge/openai"
 
   @config_lock = Mutex.new
 

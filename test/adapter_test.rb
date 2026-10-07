@@ -50,7 +50,7 @@ class AdapterTest < Minitest::Test
 
   def test_the_default_adapter_is_judge
     assert_equal :jev, Judge.config.adapter
-    assert_equal %i[jev clef], Judge::Adapter.names
+    assert_equal %i[jev clef openai], Judge::Adapter.names
     assert_instance_of Judge::Client, Judge::Adapter.build(:jev)
   end
 

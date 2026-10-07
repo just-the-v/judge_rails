@@ -8,7 +8,7 @@ module Judge
 
     class << self
       def registry
-        @registry ||= { jev: -> { Client.new }, clef: -> { Clef.new } }
+        @registry ||= { jev: -> { Client.new }, clef: -> { Clef.new }, openai: -> { OpenAI.new } }
       end
 
       def register(name, &build)

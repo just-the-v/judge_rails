@@ -469,7 +469,7 @@ The event carries sizes and counts. It never carries the state or the key.
 ```ruby
 Judge.configure do |config|
   config.api_key      = "..."                # read from JEV_API_KEY or TYPESAFE_API_KEY by default
-  config.model        = "jev-latest"         # "clef" when the adapter is :clef
+  config.model        = "jev-latest"         # "clef" under :clef, "gpt-6-luna" under :openai
   config.timeout      = 10.0
   config.open_timeout = 5.0
   config.max_retries  = 2
@@ -581,6 +581,38 @@ Judge.ask(question, text: text, adapter: :clef, model: "clef")
 
 Switching an attribute from Jev to Clef changes its model, so its stored judgments go stale and are
 recomputed on the next refresh, the same as changing a pin.
+
+### OpenAI decisions
+
+`:openai` ships with the gem too. It sends the same questions to OpenAI's
+[Decisions API](https://developers.openai.com/api/docs/guides/decisions) with `gpt-6-luna`:
+
+```sh
+JUDGE_ADAPTER=openai
+OPENAI_API_KEY=...
+```
+
+```ruby
+Judge.configure { |config| config.adapter = :openai }   # the key is read from OPENAI_API_KEY
+
+Judge.ask(Judge.noul("Is this urgent?"), text: "Checkout is down for everyone").probability  # => 0.89
+```
+
+The wire format is not Jev's, so the adapter translates both ways: `noul` becomes a `predicate`, choice
+criteria become `choices`, score levels become `levels`, and the answers come back as ordinary
+`Judge::Result`s. Three things the Decisions API does not take travel as JSON text instead:
+
+- a structured `state` (a Hash or an Array) becomes the JSON string of it;
+- `true`/`false` criteria on a `noul` are appended to its instructions as `Criteria: {...}`;
+- a structured option description, such as `{ what:, not_for:, examples: }`, becomes its JSON string.
+
+OpenAI rounds probabilities to two decimals, so a near-certain answer reads exactly `1.0`. A question it
+declines to answer raises `Judge::RefusalError`, a `Judge::InvalidResponseError` that carries
+`#question_name`. The model follows the adapter like Clef's: `gpt-6-luna` under `:openai`, and any other
+name raises `Judge::ConfigurationError` before a request leaves.
+
+An app that sets `config.model` explicitly keeps that model when it switches adapter. Drop the line, or
+set it to the new provider's model, when you move.
 
 ### You may not need an adapter at all
 

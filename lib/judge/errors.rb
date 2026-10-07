@@ -33,4 +33,13 @@ module Judge
   class PayloadTooLargeError < APIError; end
 
   class InvalidResponseError < Error; end
+
+  class RefusalError < InvalidResponseError
+    attr_reader :question_name
+
+    def initialize(message = nil, question_name: nil)
+      @question_name = question_name&.to_sym
+      super(message || "the provider refused to answer #{@question_name.inspect}")
+    end
+  end
 end
