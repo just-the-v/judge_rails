@@ -344,6 +344,30 @@ class JudgeJobsTest < JudgeRailsTest
     ActiveJob::Base.queue_name_prefix = nil
   end
 
+  def test_the_payload_carries_the_queue_of_the_first_attribute_that_names_one
+    klass = model do
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call
+      judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call, queue: :p3
+      judge_attribute :frustration, JudgeTestSupport::QUESTIONS[:frustration].call, queue: "p1"
+    end
+    klass.create!(body: "cannot log in")
+
+    assert_equal "p3", enqueued.last.queue
+  end
+
+  def test_the_payload_has_no_queue_when_no_attribute_names_one
+    async_model.create!(body: "cannot log in")
+
+    assert_nil enqueued.last.queue
+  end
+
+  def test_a_blank_attribute_queue_raises_at_declaration
+    assert_raises(ArgumentError) do
+      model { judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, source: :body, queue: " " }
+    end
+  end
+
   def test_a_database_deadlock_is_retried_by_active_job
     assert_includes Judge::Rails::Jobs::RETRYABLE_ERRORS, ActiveRecord::Deadlocked
   end
@@ -389,5 +413,50 @@ class JudgeJobsTest < JudgeRailsTest
       judge_attribute :intent, JudgeTestSupport::QUESTIONS[:intent].call, callbacks: false
       judge_attribute :frustration, JudgeTestSupport::QUESTIONS[:frustration].call, callbacks: false
     end
+  end
+end
+
+class JudgeRefreshJobQueueTest < JudgeRailsTest
+  include ActiveJob::TestHelper
+
+  def setup
+    super
+    Judge::Rails::Jobs.reset_enqueuer!
+  end
+
+  def teardown
+    Judge.reset_config!
+    clear_enqueued_jobs
+    super
+  end
+
+  def test_an_async_save_enqueues_on_the_default_queue_when_nothing_is_set
+    ticket_model.create!(body: "cannot log in")
+
+    assert_enqueued_with(job: Judge::Rails::RefreshJob, queue: "default")
+  end
+
+  def test_an_async_save_enqueues_on_the_configured_queue
+    Judge.configure { |c| c.queue = :p3 }
+    ticket_model.create!(body: "cannot log in")
+
+    assert_enqueued_with(job: Judge::Rails::RefreshJob, queue: "p3")
+  end
+
+  def test_an_attribute_queue_overrides_the_configured_one
+    Judge.configure { |c| c.queue = :p3 }
+    ticket_model(queue: :autopilot).create!(body: "cannot log in")
+
+    assert_enqueued_with(job: Judge::Rails::RefreshJob, queue: "autopilot")
+  end
+
+  private
+
+  def ticket_model(**options)
+    self.class.send(:remove_const, :QueuedTicket) if self.class.const_defined?(:QueuedTicket, false)
+    self.class.const_set(:QueuedTicket, model do
+      judge_source :body
+      judge_attribute :urgency, JudgeTestSupport::QUESTIONS[:urgency].call, **options
+    end)
   end
 end

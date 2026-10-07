@@ -3,7 +3,7 @@
 module Judge
   module Rails
     class RefreshJob < ActiveJob::Base
-      queue_as { "default" }
+      queue_as { Judge.config.queue }
       retry_on(*Jobs::RETRYABLE_ERRORS, wait: :polynomially_longer, attempts: 5)
 
       def perform(model_name, id, names = [])

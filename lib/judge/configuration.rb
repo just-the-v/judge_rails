@@ -4,10 +4,12 @@ module Judge
   class Configuration
     DEFAULT_BASE_URL = "https://api.typesafe.ai/v1/systemone"
     DEFAULT_MODEL = "jev-latest"
+    DEFAULT_QUEUE = "default"
     ADAPTER_MODELS = { clef: "clef", openai: "gpt-6-luna" }.freeze
 
     attr_reader :api_key, :base_url, :timeout, :open_timeout, :max_retries, :max_retry_wait,
-                :concurrency, :adapter, :cloudflare_api_token, :cloudflare_account_id, :openai_api_key
+                :concurrency, :adapter, :cloudflare_api_token, :cloudflare_account_id, :openai_api_key,
+                :queue
     attr_accessor :logger
 
     def initialize
@@ -24,6 +26,7 @@ module Judge
       self.max_retry_wait = 10.0
       self.concurrency = nil
       self.adapter = present_env("JUDGE_ADAPTER") || :jev
+      self.queue = present_env("JUDGE_QUEUE") || DEFAULT_QUEUE
       @logger = nil
     end
 
@@ -35,6 +38,15 @@ module Judge
       raise ArgumentError, "base_url must not be blank" if blank?(value)
 
       @base_url = value.to_s.strip
+    end
+
+    def queue=(value)
+      unless value.is_a?(String) || value.is_a?(Symbol)
+        raise ArgumentError, "queue must be a String or a Symbol, got #{value.inspect}"
+      end
+      raise ArgumentError, "queue must not be blank" if blank?(value)
+
+      @queue = value.to_s.strip
     end
 
     def cloudflare_api_token=(value)
@@ -123,7 +135,8 @@ module Judge
       token = @cloudflare_api_token ? "[FILTERED]" : "nil"
       openai = @openai_api_key ? "[FILTERED]" : "nil"
       "#<Judge::Configuration api_key=#{key} cloudflare_api_token=#{token} openai_api_key=#{openai} " \
-        "base_url=#{@base_url.inspect} model=#{model.inspect} adapter=#{@adapter.inspect}>"
+        "base_url=#{@base_url.inspect} model=#{model.inspect} adapter=#{@adapter.inspect} " \
+        "queue=#{@queue.inspect}>"
     end
 
     private
