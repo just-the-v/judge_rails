@@ -8,7 +8,7 @@ module Judge
       RETRYABLE_ERRORS = [Judge::RateLimitError, Judge::ServerError, Judge::TransportError,
                           ActiveRecord::Deadlocked, ActiveRecord::LockWaitTimeout].freeze
 
-      Payload = Struct.new(:model, :ids, :names, keyword_init: true) do
+      Payload = Struct.new(:model, :ids, :names, :queue, keyword_init: true) do
         def model_name
           model.name
         end
@@ -32,7 +32,9 @@ module Judge
         end
 
         def enqueue_record(record, names)
-          enqueuer.call(Payload.new(model: record.class, ids: [record.id], names: Array(names)))
+          names = Array(names)
+          queue = names.lazy.map { |name| record.class.judge_attributes[name]&.queue }.find(&:itself)
+          enqueuer.call(Payload.new(model: record.class, ids: [record.id], names: names, queue: queue))
         end
 
         def perform(payload, batch_size: 100, adapter: nil, raise_retryable: false)
@@ -59,7 +61,8 @@ module Judge
         private
 
         def default_enqueue(payload)
-          refresh_job.perform_later(payload.model_name, payload.ids.first, payload.names.map(&:to_s))
+          job = payload.queue ? refresh_job.set(queue: payload.queue) : refresh_job
+          job.perform_later(payload.model_name, payload.ids.first, payload.names.map(&:to_s))
         end
 
         def refresh_job

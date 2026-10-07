@@ -8,14 +8,15 @@ module Judge
       CALLBACK_MODES = %i[async inline disabled].freeze
       ERROR_MODES = %i[pass fail raise].freeze
 
-      attr_reader :name, :question, :source, :model, :callbacks, :if_condition, :on_error
+      attr_reader :name, :question, :source, :model, :queue, :callbacks, :if_condition, :on_error
 
-      def initialize(name:, question:, source:, model: nil, sync: false, callbacks: nil,
+      def initialize(name:, question:, source:, model: nil, queue: nil, sync: false, callbacks: nil,
                      if_condition: nil, on_error: :pass)
         @name = name.to_sym
         @question = question.with_name(@name)
         @source = validate_source!(source)
         @model = model
+        @queue = validate_queue!(queue)
         @callbacks = normalize_callbacks(callbacks, sync)
         @if_condition = validate_condition!(if_condition)
         @on_error = validate!(on_error.to_sym, ERROR_MODES, "on_error")
@@ -113,6 +114,14 @@ module Judge
 
         raise ArgumentError, "judge_attribute #{@name.inspect} source must be a Symbol, String or Proc, " \
                              "got #{source.class}"
+      end
+
+      def validate_queue!(queue)
+        return nil if queue.nil?
+        return queue.to_s.strip if (queue.is_a?(Symbol) || queue.is_a?(String)) && !queue.to_s.strip.empty?
+
+        raise ArgumentError, "judge_attribute #{@name.inspect} queue must be a non-blank Symbol or String, " \
+                             "got #{queue.inspect}"
       end
 
       def validate_condition!(condition)

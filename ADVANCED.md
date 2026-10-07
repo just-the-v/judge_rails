@@ -101,8 +101,11 @@ end
 Judge::Rails::Jobs.reset_enqueuer!   # back to ActiveJob
 ```
 
-The payload it receives is what the job needs to do the work later: a model name, record ids, and
-attribute names. Replaying it is `Judge::Rails::Jobs.perform(payload)`. That logs and drops every
+The payload it receives is what the job needs to do the work later: a model name, record ids,
+attribute names, and `queue`. `queue` is the `queue:` of the first of those attributes that declares one,
+or `nil`, in which case the default enqueuer uses `config.queue`. One save that refreshes attributes
+declared on different queues therefore enqueues one job, on the first of them. Your own enqueuer is free
+to ignore it. Replaying it is `Judge::Rails::Jobs.perform(payload)`. That logs and drops every
 failure. Pass `raise_retryable: true` to let a 429, a 5xx or a transport error reach your queue's own
 retry, which is what `RefreshJob` does.
 

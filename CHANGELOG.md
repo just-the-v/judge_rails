@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.5 (2026-10-07)
+
+### Added
+
+- `config.queue`, read from `JUDGE_QUEUE`, picks the ActiveJob queue `RefreshJob` goes to. It was
+  hardcoded to `default`, so an app whose workers drain other queues never ran its async judgments. The
+  default is still `default`.
+- `judge_attribute ..., queue: :p3` overrides it for one attribute. Custom enqueuers see it as
+  `payload.queue`.
+
 ## 0.0.4 (2026-10-07)
 
 ### Added

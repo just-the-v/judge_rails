@@ -257,6 +257,14 @@ changes nothing relevant enqueues nothing, and ActiveJob is optional: the enqueu
 ticket.judge_refresh_later(:urgency)
 ```
 
+`RefreshJob` goes to the `default` queue. If your workers do not drain that one, point it at a queue they
+do, because a queue nobody drains loses every judgment without an error:
+
+```ruby
+Judge.configure { |config| config.queue = :p3 }       # or JUDGE_QUEUE=p3
+judge_attribute :urgency, Judge.noul("..."), queue: :autopilot   # one attribute elsewhere
+```
+
 `sync: true` buys one thing, the right to block a save when the judgment fails. That, `if_condition`
 and bulk backfill are in [ADVANCED.md](ADVANCED.md).
 
@@ -474,6 +482,7 @@ Judge.configure do |config|
   config.open_timeout = 5.0
   config.max_retries  = 2
   config.max_retry_wait = 10.0
+  config.queue        = "default"            # RefreshJob's queue, read from JUDGE_QUEUE by default
   config.logger       = Rails.logger
 end
 ```
