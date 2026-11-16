@@ -61,7 +61,8 @@ module Judge
         record.write_attribute(
           definition.sidecar_column,
           definition.sidecar(result, state_digest: definition.state_digest(state),
-                                     model: results&.model, latency: results&.latency)
+                                     model: results&.model, latency: results&.latency,
+                                     usage: results&.usage)
         )
       end
 

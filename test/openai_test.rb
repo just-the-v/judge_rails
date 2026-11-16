@@ -115,6 +115,22 @@ class OpenAITest < Minitest::Test
     assert_kind_of Judge::InvalidResponseError, error
   end
 
+  def test_a_refusal_keeps_the_tokens_it_was_billed
+    require "active_support/notifications"
+    server = serve(answers: ANSWERS.merge("urgent" => { "type" => "refusal", "name" => "urgent" }))
+    payloads = []
+    subscription = ActiveSupport::Notifications.subscribe("request.judge") { |*args| payloads << args.last }
+    error = assert_raises(Judge::RefusalError) do
+      client(server).call(state: "x", questions: questions.slice(:urgent))
+    end
+
+    assert_equal 397, error.usage.input_tokens
+    assert_equal 397, payloads.fetch(0)[:input_tokens]
+    assert_equal 0, payloads.fetch(0)[:output_tokens]
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscription) if subscription
+  end
+
   def test_a_model_it_does_not_serve_raises_before_any_request
     server = serve
     error = assert_raises(Judge::ConfigurationError) do

@@ -52,11 +52,9 @@ module Judge
       instrument(event) do
         started = monotonic
         body = unwrap(perform(target, payload))
-        set = result_set(body, questions, monotonic - started)
-        event[:latency] = set.latency
-        event[:input_tokens] = set.usage&.input_tokens
-        event[:output_tokens] = set.usage&.output_tokens
-        set
+        latency = monotonic - started
+        record_usage(event, body, latency)
+        result_set(body, questions, latency)
       end
     end
 
@@ -89,6 +87,14 @@ module Judge
 
     def unwrap(body)
       body
+    end
+
+    # Set before the answers parse, so a refused or malformed answer still reports the tokens it was billed.
+    def record_usage(event, body, latency)
+      usage = ResultSet.parse_usage(body["usage"]) if body.is_a?(Hash)
+      event[:latency] = latency
+      event[:input_tokens] = usage&.input_tokens
+      event[:output_tokens] = usage&.output_tokens
     end
 
     def result_set(body, questions, latency)

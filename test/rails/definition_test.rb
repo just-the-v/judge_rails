@@ -132,12 +132,15 @@ class DefinitionTest < JudgeRailsTest
   def test_sidecar_captures_provenance
     d = define
     set = adapter.call(state: "x", questions: { urgency: d.question })
-    meta = d.sidecar(set[:urgency], state_digest: d.state_digest("x"), model: "jev-test-1", latency: 0.01)
+    meta = d.sidecar(set[:urgency], state_digest: d.state_digest("x"), model: "jev-test-1", latency: 0.01,
+                                    usage: set.usage)
 
     assert_equal d.digest, meta["digest"]
     assert_equal d.state_digest("x"), meta["state_digest"]
     assert_in_delta 0.91, meta["probability"]
     assert_equal "jev-test-1", meta["model"]
+    assert_equal 10, meta["input_tokens"]
+    assert_equal 2, meta["output_tokens"]
     refute_nil meta["computed_at"]
   end
 

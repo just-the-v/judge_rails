@@ -51,6 +51,8 @@ class AttributesTest < JudgeRailsTest
     assert_equal t.class.judge_definition(:urgency).digest, meta["digest"]
     assert_in_delta 0.91, meta["probability"]
     assert_equal "jev-test-1", meta["model"]
+    assert_equal 10, meta["input_tokens"]
+    assert_equal 2, meta["output_tokens"]
     assert_kind_of Time, t.urgency_computed_at
   end
 
