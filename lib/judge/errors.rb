@@ -35,10 +35,11 @@ module Judge
   class InvalidResponseError < Error; end
 
   class RefusalError < InvalidResponseError
-    attr_reader :question_name
+    attr_reader :question_name, :usage
 
-    def initialize(message = nil, question_name: nil)
+    def initialize(message = nil, question_name: nil, usage: nil)
       @question_name = question_name&.to_sym
+      @usage = usage
       super(message || "the provider refused to answer #{@question_name.inspect}")
     end
   end

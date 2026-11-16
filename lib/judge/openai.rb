@@ -65,20 +65,20 @@ module Judge
       answers = body["answers"]
       raise InvalidResponseError, "response has no answers" unless answers.is_a?(Array)
 
+      usage = ResultSet.parse_usage(body["usage"])
       by_name = answers.grep(Hash).to_h { |answer| [answer["name"].to_s, answer] }
       results = questions.map do |name, question|
         answer = by_name[name.to_s]
         raise InvalidResponseError, "no answer for #{name.inspect}" if answer.nil?
 
-        result(name, question, answer)
+        result(name, question, answer, usage)
       end
-      ResultSet.new(results, model: body["model"], usage: ResultSet.parse_usage(body["usage"]),
-                             latency: latency, raw: body)
+      ResultSet.new(results, model: body["model"], usage: usage, latency: latency, raw: body)
     end
 
-    def result(name, question, answer)
+    def result(name, question, answer, usage)
       kind = answer["type"]
-      raise RefusalError.new(question_name: name) if kind == "refusal"
+      raise RefusalError.new(question_name: name, usage: usage) if kind == "refusal"
       unless kind == QUESTION_TYPES[question.type]
         raise InvalidResponseError,
               "a #{question.type} question got a #{kind.inspect} answer for #{name.inspect}"

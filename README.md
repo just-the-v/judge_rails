@@ -184,10 +184,14 @@ ticket.urgency_computed_at  # => 2026-09-20 11:42:10 UTC
 ticket.urgency_stale?       # => false
 ticket.urgency_judge_meta
 # => {"digest" => ..., "state_digest" => ..., "computed_at" => ..., "probability" => 0.96,
-#     "probabilities" => {...}, "model" => "jev-1.13.0", "latency" => 0.69}
+#     "probabilities" => {...}, "model" => "jev-1.13.0", "latency" => 0.69,
+#     "input_tokens" => 430, "output_tokens" => 73}
 
 ticket.judge_decide(:urgency, above: 0.9, below: 0.1)   # => :yes
 ```
+
+`latency`, `input_tokens` and `output_tokens` belong to the call, and one call answers every attribute
+judged together, so each of their sidecars holds the same numbers. Sum them once per call.
 
 ## Invalidation
 
@@ -465,8 +469,10 @@ end
 ```
 
 `model`, `questions` and `request_bytes` are always there. `latency` and the two token counts are
-added once the response parses, so a **failed** request carries only the first three, plus the
-`:exception` pair ActiveSupport adds itself. Read them with `dig`, not `fetch`.
+added once a response comes back, before its answers parse, so a refused or malformed answer still
+reports what it was billed. A request that gets **no** response (a transport or API error) carries only
+the first three, plus the `:exception` pair ActiveSupport adds itself. Read them with `dig`, not
+`fetch`.
 
 One event spans the whole call, retries included, not one per HTTP attempt.
 
@@ -617,7 +623,7 @@ criteria become `choices`, score levels become `levels`, and the answers come ba
 
 OpenAI rounds probabilities to two decimals, so a near-certain answer reads exactly `1.0`. A question it
 declines to answer raises `Judge::RefusalError`, a `Judge::InvalidResponseError` that carries
-`#question_name`. The model follows the adapter like Clef's: `gpt-6-luna` under `:openai`, and any other
+`#question_name` and `#usage`, since OpenAI bills a refused call like any other. The model follows the adapter like Clef's: `gpt-6-luna` under `:openai`, and any other
 name raises `Judge::ConfigurationError` before a request leaves.
 
 An app that sets `config.model` explicitly keeps that model when it switches adapter. Drop the line, or

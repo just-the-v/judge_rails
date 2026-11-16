@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.6 (2026-11-16)
+
+### Added
+
+- The `<name>_judge` sidecar stores `input_tokens` and `output_tokens`, so an app can sum what its
+  judgments cost from its own table. They count the whole call, which answers every attribute judged
+  together, so the same numbers sit in each of those sidecars. Count them once per call, not per
+  attribute.
+- `Judge::RefusalError#usage` carries the tokens of the refused call, since the provider bills it all
+  the same.
+
+### Fixed
+
+- A response that fails to parse, such as a refusal, now reports its `latency`, `input_tokens` and
+  `output_tokens` on the `request.judge` event. They were set only after the answers parsed, so a
+  refused call looked free.
+
 ## 0.0.5 (2026-10-07)
 
 ### Added

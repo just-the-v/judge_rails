@@ -80,7 +80,7 @@ module Judge
         end
       end
 
-      def sidecar(result, state_digest:, model: nil, latency: nil)
+      def sidecar(result, state_digest:, model: nil, latency: nil, usage: nil)
         {
           "digest" => digest,
           "state_digest" => state_digest,
@@ -90,7 +90,9 @@ module Judge
           "probabilities" => result.probabilities,
           "legend" => result.legend.empty? ? nil : result.legend,
           "model" => model,
-          "latency" => latency
+          "latency" => latency,
+          "input_tokens" => usage&.input_tokens,
+          "output_tokens" => usage&.output_tokens
         }.compact
       end
 
